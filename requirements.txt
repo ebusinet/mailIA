@@ -42,6 +42,9 @@ python-telegram-bot==21.9
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
+# MCP
+fastmcp>=2.0.0
+
 # Utils
 markdown-it-py==3.0.0
 pyyaml==6.0.2

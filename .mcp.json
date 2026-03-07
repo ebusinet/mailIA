@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mailia": {
+      "command": "ssh",
+      "args": [
+        "expert-presta",
+        "cd /var/www/vhosts/expert-presta.com/mailia && docker compose exec -T -e MCP_USER_ID=2 api python -m src.mcp"
+      ]
+    }
+  }
+}
