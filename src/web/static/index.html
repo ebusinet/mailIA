@@ -1,0 +1,2044 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailIA</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <script src="https://cdn.tiny.cloud/1/no-api-key/tinymce/7/tinymce.min.js" referrerpolicy="origin"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+        .container { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+
+        /* Auth */
+        #auth-view { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .auth-card { background: #1e293b; border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; }
+        .auth-card h1 { text-align: center; color: #38bdf8; margin-bottom: 1.5rem; font-size: 1.8rem; }
+        .auth-card input { width: 100%; padding: 0.75rem; margin-bottom: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 1rem; }
+        .auth-card button { width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 0.5rem; }
+        .auth-card button:hover { background: #7dd3fc; }
+        .auth-toggle { text-align: center; margin-top: 1rem; color: #94a3b8; cursor: pointer; }
+        .auth-toggle:hover { color: #38bdf8; }
+
+        /* Header */
+        header { background: #1e293b; padding: 1rem; display: flex; justify-content: space-between; align-items: center; border-radius: 12px; margin-bottom: 1rem; }
+        header h1 { color: #38bdf8; font-size: 1.4rem; }
+        .user-info { display: flex; align-items: center; gap: 1rem; }
+        .user-info span { color: #94a3b8; }
+        .btn-sm { padding: 0.4rem 0.8rem; border: 1px solid #334155; border-radius: 6px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85rem; }
+        .btn-sm:hover { border-color: #38bdf8; color: #38bdf8; }
+        .btn-sm:disabled { opacity: 0.4; cursor: default; }
+        .btn-primary { padding: 0.5rem 1rem; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+        .btn-primary:hover { background: #7dd3fc; }
+        .btn-danger { border: 1px solid #ef4444; border-radius: 6px; background: transparent; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 0.4rem 0.8rem; }
+        .btn-danger:hover { background: #ef4444; color: #fff; }
+        .btn-success { padding: 0.5rem 1.2rem; border: none; border-radius: 6px; background: #22c55e; color: #fff; font-weight: 600; cursor: pointer; font-size: 0.9rem; }
+        .btn-success:hover { background: #4ade80; }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .tab { padding: 0.6rem 1.2rem; border: 1px solid #334155; border-radius: 8px; background: transparent; color: #94a3b8; cursor: pointer; }
+        .tab.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 600; }
+
+        /* Search */
+        .search-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .search-bar input { flex: 1; padding: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #e2e8f0; font-size: 1rem; }
+        .search-bar button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; }
+
+        .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .filters select, .filters input[type="date"] { padding: 0.5rem; border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; font-size: 0.85rem; }
+
+        .result-card { background: #1e293b; border-radius: 8px; padding: 1rem; margin-bottom: 0.5rem; border-left: 3px solid #334155; }
+        .result-card:hover { border-left-color: #38bdf8; }
+        .result-from { color: #38bdf8; font-weight: 600; }
+        .result-subject { color: #e2e8f0; margin: 0.25rem 0; }
+        .result-date { color: #64748b; font-size: 0.85rem; }
+        .result-highlight { color: #fbbf24; }
+        .result-count { color: #94a3b8; margin-bottom: 1rem; }
+
+        /* Chat */
+        .chat-container { background: #1e293b; border-radius: 12px; padding: 1rem; min-height: 400px; display: flex; flex-direction: column; }
+        .chat-messages { flex: 1; overflow-y: auto; margin-bottom: 1rem; max-height: 60vh; }
+        .chat-msg { padding: 0.75rem; border-radius: 8px; margin-bottom: 0.5rem; max-width: 85%; }
+        .chat-msg.user { background: #334155; margin-left: auto; }
+        .chat-msg.assistant { background: #0f172a; }
+        .chat-input { display: flex; gap: 0.5rem; }
+        .chat-input input { flex: 1; padding: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #0f172a; color: #e2e8f0; }
+        .chat-input button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; }
+
+        .rules-editor textarea { width: 100%; min-height: 400px; padding: 1rem; border: 1px solid #334155; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-family: 'Fira Code', monospace; font-size: 0.9rem; line-height: 1.6; resize: vertical; }
+
+        .hidden { display: none !important; }
+        .input-field { padding: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #e2e8f0; font-size: 0.95rem; }
+
+        /* Explorer */
+        .folder-item { padding: 0.3rem 0.4rem; border-radius: 4px; cursor: pointer; color: #94a3b8; font-size: 0.85rem; white-space: nowrap; }
+        .folder-item:hover { background: #334155; color: #e2e8f0; }
+        .folder-item.active { background: #38bdf8; color: #0f172a; font-weight: 600; }
+        .folder-children { margin-left: 1rem; border-left: 1px solid #334155; padding-left: 0.25rem; }
+        .folder-toggle { display: inline-block; width: 1rem; text-align: center; color: #64748b; cursor: pointer; }
+        .mail-row { display: grid; grid-template-columns: auto 1fr 2fr auto; gap: 0.4rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; align-items: center; font-size: 0.85rem; cursor: pointer; }
+        .mail-row:hover { background: #1e293b; border-radius: 4px; }
+        .mail-row.selected { border-left: 3px solid #38bdf8; }
+        .mail-row.unread .mail-from, .mail-row.unread .mail-subject { font-weight: 600; color: #e2e8f0; }
+        .mail-icons { display: flex; gap: 0.2rem; align-items: center; min-width: 2rem; }
+        .mail-icons span { font-size: 0.75rem; }
+        .mail-from { color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mail-subject { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mail-date { color: #64748b; white-space: nowrap; text-align: right; }
+        .icon-flag { color: #fbbf24; }
+        .icon-reply { color: #22c55e; }
+        .icon-priority { color: #ef4444; font-weight: bold; }
+        .icon-attach { color: #a78bfa; }
+
+        /* Email toolbar */
+        .email-toolbar { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.75rem; padding: 0.5rem; background: #0f172a; border-radius: 6px; align-items: center; }
+        .toolbar-sep { width: 1px; height: 1.2rem; background: #334155; margin: 0 0.2rem; }
+
+        /* Modal overlay (shared compose + reading) */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 1000; display: flex; justify-content: center; align-items: center; }
+        .modal-panel { background: #1e293b; border-radius: 12px; width: 96%; max-width: 1000px; height: 92vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); resize: both; overflow: hidden; min-width: 400px; min-height: 300px; max-height: 100vh; }
+        .modal-panel.modal-fullscreen { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; border-radius: 0; resize: none; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 1rem; border-bottom: 1px solid #334155; flex-shrink: 0; }
+        .modal-header h2 { color: #38bdf8; font-size: 1.1rem; margin: 0; }
+        .modal-close { background: none; border: none; color: #64748b; cursor: pointer; font-size: 1.5rem; padding: 0.25rem 0.5rem; line-height: 1; }
+        .modal-close:hover { color: #e2e8f0; }
+        .modal-fullscreen-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 1.1rem; padding: 0.25rem 0.5rem; line-height: 1; }
+        .modal-fullscreen-btn:hover { color: #e2e8f0; }
+        .modal-body { padding: 0.75rem 1rem; overflow-y: auto; flex: 1; min-height: 0; }
+        .modal-footer { display: flex; gap: 0.5rem; padding: 0.6rem 1rem; border-top: 1px solid #334155; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
+
+        /* Compose */
+        .compose-field { margin-bottom: 0.4rem; }
+        .compose-field label { display: block; color: #94a3b8; font-size: 0.75rem; margin-bottom: 0.15rem; font-weight: 500; }
+        .compose-field input, .compose-field select {
+            width: 100%; padding: 0.5rem; border: 1px solid #334155; border-radius: 6px;
+            background: #0f172a; color: #e2e8f0; font-size: 0.9rem; font-family: inherit;
+        }
+        .compose-options { display: flex; gap: 1rem; flex-wrap: wrap; padding: 0.5rem 0; align-items: center; }
+        .compose-options label { color: #94a3b8; font-size: 0.8rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+        .compose-options select { padding: 0.3rem 0.5rem; border: 1px solid #334155; border-radius: 4px; background: #0f172a; color: #e2e8f0; font-size: 0.8rem; }
+        .attachment-list { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+        .attachment-chip { background: #334155; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; color: #e2e8f0; display: flex; align-items: center; gap: 0.3rem; }
+        .attachment-chip .remove-att { cursor: pointer; color: #f87171; font-weight: bold; }
+
+        /* Reading modal */
+        .reading-meta { margin-bottom: 0.75rem; }
+        .reading-meta .subject { font-size: 1.2rem; font-weight: 600; color: #e2e8f0; }
+        .reading-meta .from { color: #38bdf8; font-size: 0.9rem; margin-top: 0.3rem; }
+        .reading-meta .to { color: #94a3b8; font-size: 0.85rem; }
+        .reading-meta .date { color: #64748b; font-size: 0.85rem; margin-top: 0.25rem; }
+
+        /* Popup menu */
+        .popup-menu { position: fixed; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 0.5rem; z-index: 1100; min-width: 200px; max-height: 300px; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .popup-menu-title { color: #64748b; font-size: 0.75rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid #334155; margin-bottom: 0.3rem; }
+        .popup-item { padding: 0.4rem 0.6rem; cursor: pointer; border-radius: 4px; font-size: 0.85rem; color: #94a3b8; }
+        .popup-item:hover { background: #334155; color: #e2e8f0; }
+
+        @media (max-width: 640px) {
+            .filters { flex-direction: column; }
+            .mail-row { grid-template-columns: auto 1fr auto; }
+            .mail-subject { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Auth View -->
+<div id="auth-view">
+    <div class="auth-card">
+        <h1>MailIA</h1>
+        <div id="login-form">
+            <input type="email" id="login-email" placeholder="Email">
+            <input type="password" id="login-password" placeholder="Mot de passe">
+            <button onclick="login()">Se connecter</button>
+            <p class="auth-toggle" onclick="toggleAuth()">Pas encore de compte ? S'inscrire</p>
+        </div>
+        <div id="register-form" class="hidden">
+            <input type="text" id="reg-username" placeholder="Nom d'utilisateur">
+            <input type="email" id="reg-email" placeholder="Email">
+            <input type="password" id="reg-password" placeholder="Mot de passe">
+            <button onclick="register()">Creer un compte</button>
+            <p class="auth-toggle" onclick="toggleAuth()">Deja un compte ? Se connecter</p>
+        </div>
+        <p id="auth-error" style="color:#f87171;text-align:center;margin-top:0.5rem"></p>
+    </div>
+</div>
+
+<!-- App View -->
+<div id="app-view" class="hidden">
+    <div class="container">
+        <header>
+            <h1>MailIA</h1>
+            <div class="user-info">
+                <span id="user-display"></span>
+                <button class="btn-sm" onclick="logout()">Deconnexion</button>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('search')">Recherche</button>
+            <button class="tab" onclick="switchTab('explorer')">Explorer</button>
+            <button class="tab" onclick="switchTab('chat')">IA Chat</button>
+            <button class="tab" onclick="switchTab('rules')">Regles</button>
+            <button class="tab" onclick="switchTab('accounts')">Comptes</button>
+            <button class="tab hidden" id="tab-admin-btn" onclick="switchTab('admin')">Admin</button>
+            <button class="tab hidden" id="tab-status-btn" onclick="switchTab('status')">Status</button>
+        </div>
+
+        <!-- Explorer Tab -->
+        <div id="tab-explorer" class="hidden">
+            <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;flex-wrap:wrap">
+                <select id="explorer-account" class="input-field" onchange="loadFolders()" style="min-width:200px">
+                    <option value="">-- Choisir un compte --</option>
+                </select>
+                <button class="btn-success" onclick="openCompose()" title="Nouveau message (N)">+ Nouveau</button>
+                <button class="btn-sm" onclick="replyEmail()" id="bar-reply" disabled title="Repondre (R)">Repondre</button>
+                <button class="btn-sm" onclick="replyAllEmail()" id="bar-reply-all" disabled>Repondre a tous</button>
+                <button class="btn-sm" onclick="forwardEmail()" id="bar-forward" disabled>Transferer</button>
+                <button class="btn-sm" onclick="toggleReadStatus()" id="bar-read" disabled>Lu/Non lu</button>
+                <button class="btn-sm" onclick="toggleFlagStatus()" id="bar-flag" disabled style="border-color:#fbbf24;color:#fbbf24">Important</button>
+                <button class="btn-sm" onclick="showMoveDialog(event)" id="bar-move" disabled>Deplacer</button>
+                <button class="btn-danger" onclick="deleteCurrentEmail()" id="bar-delete" disabled style="font-size:0.8rem">Supprimer</button>
+                <button class="btn-sm" onclick="loadMessages()" title="Rafraichir">&#8635;</button>
+                <span id="explorer-status" style="color:#64748b;font-size:0.85rem"></span>
+            </div>
+            <!-- Explorer search -->
+            <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;flex-wrap:wrap">
+                <input type="text" id="explorer-search" placeholder="Rechercher..." class="input-field" style="flex:1;min-width:200px;padding:0.5rem 0.75rem;font-size:0.85rem" onkeydown="if(event.key==='Enter')searchInFolder()">
+                <button class="btn-sm" onclick="searchInFolder()">Rechercher</button>
+                <button class="btn-sm" onclick="clearExplorerSearch()" id="explorer-search-clear" style="display:none">Effacer</button>
+                <button class="btn-sm" onclick="toggleSearchFolders()" id="btn-search-folders" style="font-size:0.8rem;display:none" title="Choisir les dossiers">&#128193; Dossiers</button>
+            </div>
+            <div id="search-folders-panel" class="hidden" style="background:#1e293b;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;font-size:0.8rem">
+                <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem">
+                    <span style="color:#94a3b8;font-weight:500">Rechercher dans :</span>
+                    <button class="btn-sm" onclick="searchFoldersSelectAll(true)" style="font-size:0.75rem;padding:0.15rem 0.4rem">Tout</button>
+                    <button class="btn-sm" onclick="searchFoldersSelectAll(false)" style="font-size:0.75rem;padding:0.15rem 0.4rem">Aucun</button>
+                    <span id="search-folders-count" style="color:#64748b;margin-left:auto"></span>
+                </div>
+                <div id="search-folders-list" style="max-height:200px;overflow-y:auto"></div>
+            </div>
+            <div style="display:flex;gap:1rem;min-height:500px">
+                <div style="min-width:220px;max-width:300px;display:flex;flex-direction:column;gap:0.5rem">
+                    <div id="explorer-tree" style="background:#1e293b;border-radius:8px;padding:0.75rem;overflow-y:auto;flex:1;max-height:65vh">
+                        <p style="color:#64748b;font-size:0.85rem">Selectionnez un compte</p>
+                    </div>
+                    <div id="folder-actions" class="hidden" style="display:flex;gap:0.3rem">
+                        <button class="btn-sm" onclick="promptCreateFolder()" style="font-size:0.8rem;flex:1">+ Nouveau dossier</button>
+                        <button class="btn-danger" onclick="promptDeleteFolder()" id="btn-delete-folder" style="font-size:0.8rem;display:none">Supprimer</button>
+                    </div>
+                </div>
+                <div style="flex:1;display:flex;flex-direction:column">
+                    <div id="explorer-folder-header" style="margin-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center">
+                        <span id="explorer-folder-name" style="color:#38bdf8;font-weight:600"></span>
+                        <span id="explorer-folder-count" style="color:#64748b;font-size:0.85rem"></span>
+                    </div>
+                    <div id="explorer-messages" style="flex:1;overflow-y:auto;max-height:70vh"></div>
+                    <div id="explorer-pager" style="display:flex;gap:0.5rem;margin-top:0.5rem;justify-content:center"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Tab -->
+        <div id="tab-search">
+            <div class="search-bar">
+                <input type="text" id="search-query" placeholder="Rechercher dans vos emails..." onkeydown="if(event.key==='Enter')doSearch()">
+                <button onclick="doSearch()">Rechercher</button>
+            </div>
+            <div class="filters">
+                <input type="date" id="filter-from">
+                <input type="date" id="filter-to">
+                <select id="filter-attachments">
+                    <option value="">Pieces jointes</option>
+                    <option value="true">Avec PJ</option>
+                    <option value="false">Sans PJ</option>
+                </select>
+            </div>
+            <p id="result-count" class="result-count"></p>
+            <div id="results"></div>
+        </div>
+
+        <!-- Chat Tab -->
+        <div id="tab-chat" class="hidden">
+            <div class="chat-container">
+                <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;align-items:center;gap:0.5rem">
+                    <label style="color:#64748b;font-size:0.8rem">Fournisseur IA:</label>
+                    <select id="chat-provider" class="input-field" style="min-width:180px;font-size:0.8rem;padding:0.3rem 0.5rem">
+                        <option value="">Par defaut</option>
+                    </select>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg assistant">Bonjour ! Je suis MailIA. Posez-moi une question sur vos emails.</div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="chat-input" placeholder="Posez une question..." onkeydown="if(event.key==='Enter')sendChat()">
+                    <button onclick="sendChat()">Envoyer</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rules Tab -->
+        <div id="tab-rules" class="hidden">
+            <h2 style="margin-bottom:1rem;color:#38bdf8">Regles de tri IA</h2>
+            <div id="rules-list"></div>
+            <h3 style="margin:1rem 0;color:#94a3b8">Nouvelle regle</h3>
+            <input type="text" id="rule-name" placeholder="Nom de la regle" style="width:100%;padding:0.75rem;margin-bottom:0.5rem;border:1px solid #334155;border-radius:8px;background:#1e293b;color:#e2e8f0">
+            <div class="rules-editor">
+                <textarea id="rule-markdown" placeholder="## Ma regle&#10;- **Si**: ...&#10;- **Alors**: ...&#10;- **Notifier**: oui/non"></textarea>
+            </div>
+            <button onclick="createRule()" style="margin-top:0.5rem;padding:0.75rem 1.5rem;border:none;border-radius:8px;background:#38bdf8;color:#0f172a;font-weight:600;cursor:pointer">Sauvegarder</button>
+        </div>
+
+        <!-- Accounts Tab -->
+        <div id="tab-accounts" class="hidden">
+            <h2 style="margin-bottom:1rem;color:#38bdf8">Comptes email</h2>
+            <div id="accounts-list"></div>
+
+            <h3 style="margin:1.5rem 0 1rem;color:#94a3b8" id="account-form-title">Ajouter un compte</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+                <input type="text" id="acc-name" placeholder="Nom du compte" class="input-field">
+                <input type="text" id="acc-imap-host" placeholder="Serveur IMAP (ex: pro1.mail.ovh.net)" class="input-field">
+                <input type="number" id="acc-imap-port" placeholder="Port IMAP" value="993" class="input-field">
+                <input type="text" id="acc-imap-user" placeholder="Utilisateur IMAP" class="input-field">
+                <div style="position:relative">
+                    <input type="password" id="acc-imap-pass" placeholder="Mot de passe IMAP" class="input-field" style="width:100%;padding-right:3rem">
+                    <button type="button" onclick="togglePasswordVisibility('acc-imap-pass', this)" style="position:absolute;right:0.5rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;padding:0.25rem">&#128065;</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem">
+                    <input type="checkbox" id="acc-imap-ssl" checked> <label for="acc-imap-ssl" style="color:#94a3b8">SSL</label>
+                </div>
+                <input type="text" id="acc-smtp-host" placeholder="Serveur SMTP" class="input-field">
+                <input type="number" id="acc-smtp-port" placeholder="Port SMTP" value="465" class="input-field">
+                <input type="text" id="acc-smtp-user" placeholder="Utilisateur SMTP (si different)" class="input-field">
+                <div style="position:relative">
+                    <input type="password" id="acc-smtp-pass" placeholder="Mot de passe SMTP (si different)" class="input-field" style="width:100%;padding-right:3rem">
+                    <button type="button" onclick="togglePasswordVisibility('acc-smtp-pass', this)" style="position:absolute;right:0.5rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;padding:0.25rem">&#128065;</button>
+                </div>
+            </div>
+            <input type="hidden" id="acc-edit-id" value="">
+            <div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap">
+                <button onclick="saveAccount()" style="padding:0.75rem 1.5rem;border:none;border-radius:8px;background:#38bdf8;color:#0f172a;font-weight:600;cursor:pointer">Sauvegarder</button>
+                <button onclick="testFromForm('imap')" class="btn-sm" id="form-test-imap">Test IMAP</button>
+                <button onclick="testFromForm('smtp')" class="btn-sm" id="form-test-smtp">Test SMTP</button>
+                <button onclick="cancelEditAccount()" class="btn-sm" id="acc-cancel-btn" style="display:none">Annuler</button>
+            </div>
+            <p id="acc-error" style="color:#f87171;margin-top:0.5rem"></p>
+            <p id="acc-success" style="color:#4ade80;margin-top:0.5rem"></p>
+            <p id="acc-test-result" style="margin-top:0.5rem;font-size:0.85rem"></p>
+        </div>
+    </div>
+</div>
+
+        <!-- Status Tab -->
+        <div id="tab-status" class="hidden">
+            <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+                <h2 style="color:#38bdf8;margin:0">Status des traitements</h2>
+                <button class="btn-sm" onclick="loadStatusPanel()" title="Rafraichir">&#8635; Rafraichir</button>
+                <label style="font-size:0.8rem;color:#64748b;margin-left:auto;display:flex;align-items:center;gap:0.3rem">
+                    <input type="checkbox" id="status-auto-refresh" onchange="toggleStatusAutoRefresh()"> Auto (30s)
+                </label>
+                <span id="status-last-refresh" style="color:#475569;font-size:0.75rem"></span>
+            </div>
+
+            <!-- Worker -->
+            <div style="background:#1e293b;border-radius:8px;padding:1rem;margin-bottom:1rem">
+                <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Worker Celery</h3>
+                <div id="status-worker"></div>
+            </div>
+
+            <!-- Elasticsearch -->
+            <div style="background:#1e293b;border-radius:8px;padding:1rem;margin-bottom:1rem">
+                <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Elasticsearch</h3>
+                <div id="status-es"></div>
+            </div>
+
+            <!-- Accounts Sync -->
+            <div style="background:#1e293b;border-radius:8px;padding:1rem;margin-bottom:1rem">
+                <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Synchronisation des comptes</h3>
+                <div id="status-accounts"></div>
+            </div>
+
+            <!-- Processing Logs -->
+            <div style="background:#1e293b;border-radius:8px;padding:1rem;margin-bottom:1rem">
+                <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Derniers traitements</h3>
+                <div id="status-logs"></div>
+            </div>
+        </div>
+
+        <!-- Admin Tab -->
+        <div id="tab-admin" class="hidden">
+            <h2 style="color:#38bdf8;margin-bottom:1rem">Administration</h2>
+
+            <div style="display:grid;gap:1.5rem;grid-template-columns:1fr 1fr">
+                <!-- Settings -->
+                <div style="background:#1e293b;border-radius:8px;padding:1rem">
+                    <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Configuration systeme</h3>
+                    <div id="admin-settings-list"></div>
+                    <button class="btn-success" onclick="saveAdminSettings()" style="margin-top:0.75rem">Sauvegarder</button>
+                    <span id="admin-settings-status" style="color:#94a3b8;font-size:0.85rem;margin-left:0.5rem"></span>
+                </div>
+
+                <!-- Users -->
+                <div style="background:#1e293b;border-radius:8px;padding:1rem">
+                    <h3 style="color:#e2e8f0;margin-bottom:0.75rem;font-size:1rem">Utilisateurs</h3>
+                    <div id="admin-users-list"></div>
+                    <div id="admin-info" style="margin-top:0.75rem;color:#64748b;font-size:0.85rem"></div>
+                </div>
+            </div>
+        </div>
+
+<!-- Compose Modal -->
+<div id="compose-overlay" class="modal-overlay hidden">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <h2 id="compose-title">Nouveau message</h2>
+            <div style="display:flex;gap:0.2rem;align-items:center">
+                <button class="modal-fullscreen-btn" onclick="toggleModalFullscreen(this)" title="Plein ecran">&#x26F6;</button>
+                <button class="modal-close" onclick="closeCompose()">&times;</button>
+            </div>
+        </div>
+        <div class="modal-body" style="display:flex;flex-direction:column">
+            <div class="compose-field">
+                <label>De</label>
+                <select id="compose-from"></select>
+            </div>
+            <div class="compose-field">
+                <label>A</label>
+                <input type="text" id="compose-to" placeholder="destinataire@email.com (virgules pour separer)">
+            </div>
+            <div style="margin-bottom:0.3rem">
+                <span style="color:#64748b;font-size:0.75rem;cursor:pointer" onclick="document.getElementById('compose-cc-bcc').classList.toggle('hidden')">+ Cc / Cci</span>
+            </div>
+            <div id="compose-cc-bcc" class="hidden">
+                <div class="compose-field">
+                    <label>Cc</label>
+                    <input type="text" id="compose-cc" placeholder="Copies">
+                </div>
+                <div class="compose-field">
+                    <label>Cci (copie cachee)</label>
+                    <input type="text" id="compose-bcc" placeholder="Copies cachees">
+                </div>
+            </div>
+            <div class="compose-field">
+                <label>Objet</label>
+                <input type="text" id="compose-subject" placeholder="Objet du message">
+            </div>
+            <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+                <label style="display:block;color:#94a3b8;font-size:0.75rem;margin-bottom:0.15rem;font-weight:500">Message</label>
+                <div id="compose-editor" style="flex:1"></div>
+            </div>
+            <div class="compose-options">
+                <label>
+                    Priorite:
+                    <select id="compose-priority">
+                        <option value="">Normale</option>
+                        <option value="high">Haute (Urgent)</option>
+                        <option value="low">Basse</option>
+                    </select>
+                </label>
+                <label><input type="checkbox" id="compose-read-receipt"> Accuse de lecture</label>
+                <label><input type="checkbox" id="compose-delivery-receipt"> Confirmation de livraison</label>
+            </div>
+            <div class="compose-field">
+                <label>Pieces jointes</label>
+                <input type="file" id="compose-files" multiple onchange="handleFileSelect()" style="font-size:0.85rem">
+                <div class="attachment-list" id="compose-attachments-list"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-success" onclick="sendComposedEmail()" id="compose-send-btn">Envoyer</button>
+            <button class="btn-primary" onclick="saveDraft()" style="font-size:0.85rem">Brouillon</button>
+            <button class="btn-sm" onclick="closeCompose()">Annuler</button>
+            <span id="compose-status" style="color:#94a3b8;font-size:0.85rem;margin-left:auto"></span>
+        </div>
+    </div>
+</div>
+
+<!-- Reading Modal -->
+<div id="reading-overlay" class="modal-overlay hidden">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <h2 id="reading-modal-title" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Email</h2>
+            <div style="display:flex;gap:0.3rem;align-items:center;flex-shrink:0">
+                <button class="btn-sm" onclick="replyEmail()">Repondre</button>
+                <button class="btn-sm" onclick="replyAllEmail()">Repondre a tous</button>
+                <button class="btn-sm" onclick="forwardEmail()">Transferer</button>
+                <span class="toolbar-sep"></span>
+                <button class="btn-sm" onclick="toggleReadStatus()" id="btn-read-toggle">Non lu</button>
+                <button class="btn-sm" onclick="toggleFlagStatus()" id="btn-flag-toggle">Important</button>
+                <button class="btn-sm" onclick="showMoveDialog(event)">Deplacer</button>
+                <button class="btn-danger" onclick="deleteCurrentEmail()" style="font-size:0.8rem">Supprimer</button>
+            </div>
+            <button class="modal-fullscreen-btn" onclick="toggleModalFullscreen(this)" title="Plein ecran">&#x26F6;</button>
+            <button class="modal-close" onclick="closeReadingPane()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="reading-meta">
+                <div style="display:flex;align-items:center;gap:0.5rem">
+                    <div id="email-subject" class="subject" style="flex:1"></div>
+                    <span id="email-priority-badge" class="hidden" style="background:#ef4444;color:#fff;padding:0.1rem 0.5rem;border-radius:4px;font-size:0.7rem;font-weight:600">URGENT</span>
+                </div>
+                <div id="email-from" class="from"></div>
+                <div id="email-to" class="to"></div>
+                <div id="email-cc" class="to" style="display:none"></div>
+                <div id="email-date" class="date"></div>
+                <div id="email-attachments" style="margin-top:0.5rem;display:none"></div>
+            </div>
+            <hr style="border-color:#334155;margin:0.75rem 0">
+            <div id="email-body-html-toggle" style="display:none;margin-bottom:0.5rem">
+                <button onclick="toggleHtmlView()" class="btn-sm" id="btn-html-toggle">Voir en texte</button>
+            </div>
+            <iframe id="email-body-html" style="display:none;width:100%;border:none;border-radius:4px;background:#fff;flex:1;min-height:500px" sandbox="allow-same-origin"></iframe>
+            <div id="email-body" style="display:none;color:#cbd5e1;font-size:0.9rem;line-height:1.5;white-space:pre-wrap;word-break:break-word"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Detect base path from URL (/mailia → /mailia/api, / → /api)
+const _base = window.location.pathname.match(/^(\/[^\/]+)/)?.[1] || '';
+const API = _base + '/api';
+let token = localStorage.getItem('mailia_token');
+let aiProvidersCache = [];
+
+// Cookie helpers
+function setCookie(k, v, days) { const d = new Date(); d.setTime(d.getTime() + (days||30)*86400000); document.cookie = k + '=' + encodeURIComponent(v) + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax'; }
+function getCookie(k) { const m = document.cookie.match('(^|;)\\s*' + k + '=([^;]*)'); return m ? decodeURIComponent(m[2]) : ''; }
+function delCookie(k) { document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/'; }
+
+if (token) initApp();
+
+function api(path, opts = {}) {
+    const headers = { 'Content-Type': 'application/json', ...opts.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch(API + path, { ...opts, headers }).then(async r => {
+        if (r.status === 401) { logout(); throw new Error('Unauthorized'); }
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || 'Error');
+        return data;
+    });
+}
+
+function apiRaw(path, opts = {}) {
+    const headers = { ...opts.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch(API + path, { ...opts, headers });
+}
+
+function toggleAuth() {
+    document.getElementById('login-form').classList.toggle('hidden');
+    document.getElementById('register-form').classList.toggle('hidden');
+}
+
+async function login() {
+    try {
+        const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({
+            email: document.getElementById('login-email').value,
+            password: document.getElementById('login-password').value,
+        })});
+        token = data.access_token;
+        localStorage.setItem('mailia_token', token);
+        initApp();
+    } catch(e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+async function register() {
+    try {
+        const data = await api('/auth/register', { method: 'POST', body: JSON.stringify({
+            username: document.getElementById('reg-username').value,
+            email: document.getElementById('reg-email').value,
+            password: document.getElementById('reg-password').value,
+        })});
+        token = data.access_token;
+        localStorage.setItem('mailia_token', token);
+        initApp();
+    } catch(e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+function logout() {
+    token = null;
+    localStorage.removeItem('mailia_token');
+    delCookie('mailia_tab'); delCookie('mailia_account'); delCookie('mailia_folder'); delCookie('mailia_ai_provider');
+    document.getElementById('auth-view').classList.remove('hidden');
+    document.getElementById('app-view').classList.add('hidden');
+}
+
+async function initApp() {
+    document.getElementById('auth-view').classList.add('hidden');
+    document.getElementById('app-view').classList.remove('hidden');
+    try {
+        const user = await api('/auth/me');
+        document.getElementById('user-display').textContent = user.username;
+        if (user.is_admin) {
+            document.getElementById('tab-admin-btn').classList.remove('hidden');
+            document.getElementById('tab-status-btn').classList.remove('hidden');
+        }
+    } catch(e) { logout(); return; }
+    loadRules();
+    await loadAccounts();
+    loadExplorerAccounts();
+    loadAIProviders();
+
+    // Restore saved tab
+    const savedTab = getCookie('mailia_tab');
+    if (savedTab) {
+        const tabBtn = document.querySelector(`.tab[onclick*="'${savedTab}'"]`);
+        if (tabBtn) tabBtn.click();
+    }
+
+    // Restore saved account and folder
+    const savedAcct = getCookie('mailia_account');
+    if (savedAcct) {
+        const sel = document.getElementById('explorer-account');
+        if (sel.querySelector(`option[value="${savedAcct}"]`)) {
+            sel.value = savedAcct;
+            await loadFolders();
+            const savedFolder = getCookie('mailia_folder');
+            if (savedFolder && explorerFoldersCache.some(f => f.path === savedFolder)) {
+                await selectFolder(savedFolder);
+            }
+        }
+    }
+}
+
+function switchTab(name) {
+    document.querySelectorAll('[id^="tab-"]').forEach(t => {
+        if (t.id === 'tab-admin-btn' || t.id === 'tab-status-btn') return;
+        t.classList.add('hidden');
+    });
+    document.getElementById('tab-' + name).classList.remove('hidden');
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    event.target.classList.add('active');
+    setCookie('mailia_tab', name);
+    if (name === 'admin') loadAdminPanel();
+    if (name === 'status') loadStatusPanel();
+}
+
+// === Search ===
+async function doSearch() {
+    const q = document.getElementById('search-query').value;
+    const params = new URLSearchParams({ q });
+    const df = document.getElementById('filter-from').value;
+    const dt = document.getElementById('filter-to').value;
+    const att = document.getElementById('filter-attachments').value;
+    if (df) params.set('date_from', df);
+    if (dt) params.set('date_to', dt);
+    if (att) params.set('has_attachments', att);
+
+    const data = await api('/search/?' + params);
+    document.getElementById('result-count').textContent = `${data.total} resultats`;
+    document.getElementById('results').innerHTML = data.results.map(r => `
+        <div class="result-card">
+            <div class="result-from">${esc(r.from_addr)}</div>
+            <div class="result-subject">${esc(r.subject)}</div>
+            <div class="result-date">${r.date} | ${r.folder}
+                ${r.has_attachments ? '<span style="color:#a78bfa"> PJ</span>' : ''}</div>
+            ${r.highlight?.body ? '<div class="result-highlight">' + r.highlight.body.join('...') + '</div>' : ''}
+        </div>`).join('');
+}
+
+// === Chat ===
+async function loadAIProviders() {
+    try {
+        aiProvidersCache = await api('/ai/providers');
+        const sel = document.getElementById('chat-provider');
+        sel.innerHTML = '<option value="">Par defaut</option>';
+        for (const p of aiProvidersCache) {
+            sel.innerHTML += `<option value="${p.id}" ${p.is_default ? 'selected' : ''}>${esc(p.name)} (${esc(p.model)})</option>`;
+        }
+        // Restore saved provider
+        const saved = getCookie('mailia_ai_provider');
+        if (saved && sel.querySelector(`option[value="${saved}"]`)) sel.value = saved;
+    } catch(e) {}
+}
+
+async function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    const container = document.getElementById('chat-messages');
+    container.innerHTML += `<div class="chat-msg user">${esc(msg)}</div>`;
+    container.innerHTML += `<div class="chat-msg assistant" id="typing">...</div>`;
+    container.scrollTop = container.scrollHeight;
+
+    const providerId = document.getElementById('chat-provider').value;
+    if (providerId) setCookie('mailia_ai_provider', providerId);
+    const body = { message: msg };
+    if (providerId) body.provider_id = parseInt(providerId);
+
+    try {
+        const data = await api('/ai/chat', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('typing').outerHTML =
+            `<div class="chat-msg assistant">${esc(data.response)}<br><small style="color:#64748b">${data.provider}/${data.model}</small></div>`;
+    } catch(e) {
+        document.getElementById('typing').outerHTML =
+            `<div class="chat-msg assistant" style="color:#f87171">Erreur: ${esc(e.message)}</div>`;
+    }
+    container.scrollTop = container.scrollHeight;
+}
+
+// === Rules ===
+async function loadRules() {
+    try {
+        const rules = await api('/rules/');
+        document.getElementById('rules-list').innerHTML = rules.map(r => `
+            <div class="result-card">
+                <div class="result-from">${esc(r.name)} <span style="color:${r.is_active?'#4ade80':'#f87171'}">${r.is_active?'actif':'inactif'}</span></div>
+                <div class="result-date">Priorite: ${r.priority} | ${r.parsed_count} regles parsees</div>
+                <button class="btn-sm" onclick="deleteRule(${r.id})" style="margin-top:0.5rem">Supprimer</button>
+            </div>`).join('');
+    } catch(e) {}
+}
+async function createRule() {
+    const name = document.getElementById('rule-name').value;
+    const md = document.getElementById('rule-markdown').value;
+    if (!name || !md) return;
+    await api('/rules/', { method: 'POST', body: JSON.stringify({ name, rules_markdown: md }) });
+    document.getElementById('rule-name').value = '';
+    document.getElementById('rule-markdown').value = '';
+    loadRules();
+}
+async function deleteRule(id) { await api('/rules/' + id, { method: 'DELETE' }); loadRules(); }
+
+// === Accounts ===
+let accountsCache = [];
+async function loadAccounts() {
+    try {
+        accountsCache = await api('/accounts/');
+        document.getElementById('accounts-list').innerHTML = accountsCache.map(a => `
+            <div class="result-card">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                        <div class="result-from">${esc(a.name)}</div>
+                        <div class="result-date">
+                            IMAP: ${esc(a.imap_host)}:${a.imap_port} ${a.imap_ssl ? '(SSL)' : ''} | ${esc(a.imap_user)}
+                            ${a.smtp_host ? '<br>SMTP: ' + esc(a.smtp_host) + ':' + a.smtp_port : '<br><span style="color:#fbbf24">SMTP non configure</span>'}
+                        </div>
+                        <div class="result-date" style="margin-top:0.25rem">
+                            Sync: ${a.sync_enabled ? '<span style="color:#4ade80">actif</span>' : '<span style="color:#f87171">inactif</span>'}
+                            ${a.last_sync_at ? ' | Dernier: ' + a.last_sync_at : ''}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:0.3rem;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;max-width:280px">
+                        <button class="btn-sm" onclick="testConnection(${a.id},'imap')" id="test-imap-${a.id}">Test IMAP</button>
+                        <button class="btn-sm" onclick="testConnection(${a.id},'smtp')" id="test-smtp-${a.id}" ${a.smtp_host ? '' : 'disabled'}>Test SMTP</button>
+                        <button class="btn-sm" onclick="syncAccount(${a.id})" style="border-color:#4ade80;color:#4ade80" id="sync-btn-${a.id}">Sync</button>
+                        <button class="btn-sm" onclick="editAccount(${a.id})">Editer</button>
+                        <button class="btn-sm" onclick="toggleSyncAccount(${a.id}, ${!a.sync_enabled})">${a.sync_enabled ? 'Desactiver' : 'Activer'}</button>
+                        <button class="btn-danger" onclick="deleteAccount(${a.id})">Supprimer</button>
+                    </div>
+                </div>
+                <div id="test-result-${a.id}" style="margin-top:0.5rem;font-size:0.85rem;display:none"></div>
+            </div>`).join('') || '<p style="color:#94a3b8">Aucun compte configure.</p>';
+    } catch(e) {}
+}
+
+async function saveAccount() {
+    const errEl = document.getElementById('acc-error');
+    const successEl = document.getElementById('acc-success');
+    errEl.textContent = ''; successEl.textContent = '';
+    const editId = document.getElementById('acc-edit-id').value;
+    const body = {
+        name: document.getElementById('acc-name').value.trim(),
+        imap_host: document.getElementById('acc-imap-host').value.trim(),
+        imap_port: parseInt(document.getElementById('acc-imap-port').value) || 993,
+        imap_user: document.getElementById('acc-imap-user').value.trim(),
+        imap_ssl: document.getElementById('acc-imap-ssl').checked,
+        smtp_host: document.getElementById('acc-smtp-host').value.trim() || null,
+        smtp_port: parseInt(document.getElementById('acc-smtp-port').value) || 465,
+        smtp_user: document.getElementById('acc-smtp-user').value.trim() || null,
+    };
+    const imap_password = document.getElementById('acc-imap-pass').value;
+    const smtp_password = document.getElementById('acc-smtp-pass').value;
+    if (!body.name || !body.imap_host || !body.imap_user) { errEl.textContent = 'Nom, serveur IMAP et utilisateur requis.'; return; }
+    try {
+        if (editId) {
+            if (imap_password) body.imap_password = imap_password;
+            if (smtp_password) body.smtp_password = smtp_password;
+            await api('/accounts/' + editId, { method: 'PUT', body: JSON.stringify(body) });
+            successEl.textContent = 'Compte mis a jour !';
+        } else {
+            if (!imap_password) { errEl.textContent = 'Mot de passe IMAP requis.'; return; }
+            body.imap_password = imap_password;
+            if (smtp_password) body.smtp_password = smtp_password;
+            await api('/accounts/', { method: 'POST', body: JSON.stringify(body) });
+            successEl.textContent = 'Compte ajoute !';
+        }
+        clearAccountForm(); await loadAccounts(); loadExplorerAccounts();
+    } catch(e) { errEl.textContent = e.message; }
+}
+
+function editAccount(id) {
+    const a = accountsCache.find(x => x.id === id); if (!a) return;
+    document.getElementById('acc-edit-id').value = a.id;
+    document.getElementById('acc-name').value = a.name;
+    document.getElementById('acc-imap-host').value = a.imap_host;
+    document.getElementById('acc-imap-port').value = a.imap_port;
+    document.getElementById('acc-imap-user').value = a.imap_user;
+    document.getElementById('acc-imap-pass').value = '';
+    document.getElementById('acc-imap-pass').placeholder = 'Laisser vide pour garder';
+    document.getElementById('acc-imap-ssl').checked = a.imap_ssl;
+    document.getElementById('acc-smtp-host').value = a.smtp_host || '';
+    document.getElementById('acc-smtp-port').value = a.smtp_port || 465;
+    document.getElementById('acc-smtp-user').value = a.smtp_user || '';
+    document.getElementById('acc-smtp-pass').value = '';
+    document.getElementById('account-form-title').textContent = 'Modifier: ' + a.name;
+    document.getElementById('acc-cancel-btn').style.display = 'inline-block';
+    document.getElementById('account-form-title').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function testConnection(id, type) {
+    const btn = document.getElementById(`test-${type}-${id}`);
+    const resultEl = document.getElementById(`test-result-${id}`);
+    const orig = btn.textContent;
+    btn.textContent = 'Test...'; btn.disabled = true;
+    resultEl.style.display = 'block'; resultEl.style.color = '#94a3b8';
+    resultEl.textContent = `Test ${type.toUpperCase()} en cours...`;
+    try {
+        const data = await api(`/accounts/${id}/test-${type}`, { method: 'POST' });
+        resultEl.style.color = data.status === 'ok' ? '#4ade80' : '#f87171';
+        resultEl.textContent = `${type.toUpperCase()}: ${data.message}`;
+    } catch(e) { resultEl.style.color = '#f87171'; resultEl.textContent = `${type.toUpperCase()}: ${e.message}`; }
+    btn.textContent = orig; btn.disabled = false;
+}
+
+async function syncAccount(id) {
+    const btn = document.getElementById('sync-btn-' + id);
+    btn.textContent = 'Sync...'; btn.disabled = true;
+    try { await api('/accounts/' + id + '/sync', { method: 'POST' }); btn.textContent = 'Lance !'; }
+    catch(e) { btn.textContent = 'Erreur'; }
+    setTimeout(() => { btn.textContent = 'Sync'; btn.disabled = false; }, 3000);
+}
+
+async function toggleSyncAccount(id, enable) {
+    try { await api('/accounts/' + id, { method: 'PUT', body: JSON.stringify({ sync_enabled: enable }) }); loadAccounts(); } catch(e) { alert(e.message); }
+}
+
+async function deleteAccount(id) {
+    if (!confirm('Supprimer ce compte email ?')) return;
+    try { await api('/accounts/' + id, { method: 'DELETE' }); loadAccounts(); loadExplorerAccounts(); } catch(e) { alert(e.message); }
+}
+
+function clearAccountForm() {
+    ['acc-name','acc-imap-host','acc-imap-user','acc-smtp-host','acc-smtp-user','acc-smtp-pass'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('acc-imap-port').value = '993';
+    document.getElementById('acc-smtp-port').value = '465';
+    document.getElementById('acc-imap-pass').value = '';
+    document.getElementById('acc-imap-pass').placeholder = 'Mot de passe IMAP';
+    document.getElementById('acc-imap-ssl').checked = true;
+    document.getElementById('acc-edit-id').value = '';
+    document.getElementById('acc-cancel-btn').style.display = 'none';
+    document.getElementById('account-form-title').textContent = 'Ajouter un compte';
+    document.getElementById('acc-error').textContent = '';
+    document.getElementById('acc-success').textContent = '';
+}
+function cancelEditAccount() { clearAccountForm(); }
+function togglePasswordVisibility(fieldId, btn) {
+    const input = document.getElementById(fieldId);
+    input.type = input.type === 'password' ? 'text' : 'password';
+    btn.style.color = input.type === 'text' ? '#38bdf8' : '#64748b';
+}
+
+async function testFromForm(type) {
+    const resultEl = document.getElementById('acc-test-result');
+    const btn = document.getElementById('form-test-' + type);
+    const orig = btn.textContent;
+    const body = {
+        imap_host: document.getElementById('acc-imap-host').value.trim(),
+        imap_port: parseInt(document.getElementById('acc-imap-port').value) || 993,
+        imap_ssl: document.getElementById('acc-imap-ssl').checked,
+        imap_user: document.getElementById('acc-imap-user').value.trim(),
+        imap_password: document.getElementById('acc-imap-pass').value,
+        smtp_host: document.getElementById('acc-smtp-host').value.trim() || null,
+        smtp_port: parseInt(document.getElementById('acc-smtp-port').value) || 465,
+        test_type: type,
+    };
+    if (!body.imap_host || !body.imap_user || !body.imap_password) { resultEl.style.color = '#f87171'; resultEl.textContent = 'Serveur, utilisateur et mot de passe requis.'; return; }
+    if (type === 'smtp' && !body.smtp_host) { resultEl.style.color = '#f87171'; resultEl.textContent = 'Serveur SMTP requis.'; return; }
+    btn.textContent = 'Test...'; btn.disabled = true;
+    try {
+        const data = await api('/accounts/test-credentials', { method: 'POST', body: JSON.stringify(body) });
+        resultEl.style.color = data.status === 'ok' ? '#4ade80' : '#f87171';
+        resultEl.textContent = `${type.toUpperCase()}: ${data.message}`;
+    } catch(e) { resultEl.style.color = '#f87171'; resultEl.textContent = `${type.toUpperCase()}: ${e.message}`; }
+    btn.textContent = orig; btn.disabled = false;
+}
+
+// ===========================================================================
+// EXPLORER — Folder tree, message list, reading pane
+// ===========================================================================
+
+let explorerCurrentAccount = null;
+let explorerCurrentFolder = null;
+let explorerCurrentPage = 0;
+let explorerFoldersCache = [];
+let explorerFoldersTree = [];
+let explorerSeparator = '.';
+let currentEmailData = null;
+let currentEmailHtml = '';
+
+async function loadExplorerAccounts() {
+    const sel = document.getElementById('explorer-account');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">-- Choisir un compte --</option>';
+    for (const a of accountsCache) {
+        sel.innerHTML += `<option value="${a.id}" ${a.id == current ? 'selected' : ''}>${esc(a.name)} (${esc(a.imap_user)})</option>`;
+    }
+}
+
+async function loadFolders() {
+    const accountId = document.getElementById('explorer-account').value;
+    const treeEl = document.getElementById('explorer-tree');
+    const statusEl = document.getElementById('explorer-status');
+    if (!accountId) {
+        treeEl.innerHTML = '<p style="color:#64748b;font-size:0.85rem">Selectionnez un compte</p>';
+        document.getElementById('explorer-messages').innerHTML = '';
+        document.getElementById('explorer-folder-name').textContent = '';
+        document.getElementById('explorer-folder-count').textContent = '';
+        return;
+    }
+    explorerCurrentAccount = accountId;
+    setCookie('mailia_account', accountId);
+    treeEl.innerHTML = '<p style="color:#64748b">Chargement...</p>';
+    statusEl.textContent = 'Connexion IMAP...';
+    document.getElementById('folder-actions').classList.add('hidden');
+    try {
+        const data = await api(`/accounts/${accountId}/folders`);
+        statusEl.textContent = '';
+        explorerFoldersCache = flattenFolders(data.folders);
+        explorerFoldersTree = data.folders;
+        explorerSeparator = data.separator || '.';
+        treeEl.innerHTML = renderFolderTree(data.folders);
+        document.getElementById('folder-actions').classList.remove('hidden');
+        document.getElementById('btn-search-folders').style.display = 'inline-block';
+        renderSearchFoldersList();
+    } catch(e) {
+        statusEl.textContent = '';
+        treeEl.innerHTML = `<p style="color:#f87171;font-size:0.85rem">Erreur: ${esc(e.message)}</p>`;
+    }
+}
+
+function flattenFolders(folders, result) {
+    result = result || [];
+    for (const f of folders) {
+        result.push({ name: f.name, path: f.path });
+        if (f.children) flattenFolders(f.children, result);
+    }
+    return result;
+}
+
+function renderFolderTree(folders) {
+    let html = '';
+    for (const f of folders) {
+        const hasChildren = f.children && f.children.length > 0;
+        const fid = 'f-' + btoa(unescape(encodeURIComponent(f.path))).replace(/[^a-zA-Z0-9]/g, '');
+        const noselect = f.noselect;
+        html += '<div>';
+        if (noselect) {
+            html += `<div class="folder-item" style="color:#64748b;cursor:default" id="${fid}">`;
+        } else {
+            html += `<div class="folder-item" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path)" id="${fid}">`;
+        }
+        if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
+        else html += '<span class="folder-toggle"></span> ';
+        html += `${esc(f.name)}</div>`;
+        if (hasChildren) {
+            html += `<div class="folder-children" id="${fid}c" style="display:none">${renderFolderTree(f.children)}</div>`;
+        }
+        html += '</div>';
+    }
+    return html;
+}
+
+function toggleFolder(childrenId) {
+    const el = document.getElementById(childrenId);
+    if (!el) return;
+    const visible = el.style.display !== 'none';
+    el.style.display = visible ? 'none' : 'block';
+    const toggle = el.previousElementSibling?.querySelector('.folder-toggle');
+    if (toggle) toggle.innerHTML = visible ? '&#9654;' : '&#9660;';
+}
+
+async function selectFolder(path) {
+    document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.folder-item').forEach(el => {
+        if (el.dataset.path === path) el.classList.add('active');
+    });
+    explorerCurrentFolder = path;
+    explorerCurrentPage = 0;
+    explorerSearchQuery = '';
+    document.getElementById('explorer-search').value = '';
+    document.getElementById('explorer-search-clear').style.display = 'none';
+    closeReadingPane();
+    setCookie('mailia_folder', path);
+    // Show delete button (hide for INBOX)
+    const delBtn = document.getElementById('btn-delete-folder');
+    delBtn.style.display = (path && path.toUpperCase() !== 'INBOX') ? 'block' : 'none';
+    await loadMessages();
+}
+
+let explorerSearchQuery = '';
+
+function updateActionBar() {
+    const hasEmail = !!currentEmailData;
+    ['bar-reply','bar-reply-all','bar-forward','bar-read','bar-flag','bar-move','bar-delete'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !hasEmail;
+    });
+}
+
+async function searchInFolder() {
+    const q = document.getElementById('explorer-search').value.trim();
+    if (!q) return;
+    explorerSearchQuery = q;
+    explorerCurrentPage = 0;
+    document.getElementById('explorer-search-clear').style.display = 'inline-block';
+
+    // Check selected folders
+    const checkedFolders = getSearchSelectedFolders();
+    if (checkedFolders.length > 0 && !(checkedFolders.length === 1 && checkedFolders[0] === explorerCurrentFolder)) {
+        await searchMultiFolders(q, checkedFolders);
+    } else {
+        await loadMessages();
+    }
+}
+
+async function searchMultiFolders(q, folders) {
+    const msgEl = document.getElementById('explorer-messages');
+    msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Recherche dans ' + folders.length + ' dossier(s)...</p>';
+    document.getElementById('explorer-folder-name').textContent = 'Recherche multi-dossiers';
+    document.getElementById('explorer-pager').innerHTML = '';
+
+    try {
+        const data = await api(`/accounts/${explorerCurrentAccount}/search-multi`, {
+            method: 'POST',
+            body: JSON.stringify({ q, folders, max_per_folder: 100 }),
+        });
+        document.getElementById('explorer-folder-count').textContent = data.total + ' resultat(s)';
+
+        if (!data.messages.length) {
+            msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Aucun resultat</p>';
+        } else {
+            multiSearchResults = data.messages;
+            msgEl.innerHTML = data.messages.map(m => {
+                let icons = '';
+                if (m.flagged) icons += '<span class="icon-flag" title="Important">&#9733;</span>';
+                if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
+                const folderBadge = `<span style="background:#334155;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;color:#64748b;margin-left:0.3rem">${esc(m.folder)}</span>`;
+                return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmailFromSearch('${m.uid}', '${escAttr(m.folder)}', this)" data-uid="${m.uid}" data-folder="${escAttr(m.folder)}" data-seen="${m.seen}" data-flagged="${m.flagged}">
+                    <div class="mail-icons">${icons}</div>
+                    <div class="mail-from">${esc(m.from)}</div>
+                    <div class="mail-subject">${esc(m.subject) || '<em style="color:#64748b">(sans sujet)</em>'}${folderBadge}</div>
+                    <div class="mail-date">${esc(m.date)}</div>
+                </div>`;
+            }).join('');
+        }
+        if (data.errors && data.errors.length) {
+            console.warn('Search errors:', data.errors);
+        }
+    } catch(e) {
+        msgEl.innerHTML = `<p style="color:#f87171;padding:1rem">Erreur: ${esc(e.message)}</p>`;
+    }
+}
+
+let multiSearchResults = null;
+
+async function openEmailFromSearch(uid, folder, rowEl) {
+    // Temporarily switch folder context for opening this email
+    const prevFolder = explorerCurrentFolder;
+    explorerCurrentFolder = folder;
+    await openEmail(uid, rowEl);
+    // Keep the folder context for actions (reply, move, delete) on this email
+}
+
+function clearExplorerSearch() {
+    document.getElementById('explorer-search').value = '';
+    explorerSearchQuery = '';
+    explorerCurrentPage = 0;
+    multiSearchResults = null;
+    document.getElementById('explorer-search-clear').style.display = 'none';
+    loadMessages();
+}
+
+function toggleSearchFolders() {
+    document.getElementById('search-folders-panel').classList.toggle('hidden');
+}
+
+function renderSearchFoldersList() {
+    const el = document.getElementById('search-folders-list');
+    el.innerHTML = _renderSearchTree(explorerFoldersTree, 0);
+    updateSearchFoldersCount();
+}
+
+function _renderSearchTree(folders, depth) {
+    let html = '';
+    for (const f of folders) {
+        const hasChildren = f.children && f.children.length > 0;
+        const indent = depth * 1.2;
+        const noselect = f.noselect;
+        const sfid = 'sf-' + btoa(unescape(encodeURIComponent(f.path))).replace(/[^a-zA-Z0-9]/g, '');
+
+        html += `<div style="padding-left:${indent}rem">`;
+        html += `<div style="display:flex;align-items:center;gap:0.3rem;padding:0.15rem 0">`;
+
+        if (hasChildren) {
+            html += `<span style="cursor:pointer;color:#64748b;font-size:0.7rem;width:0.8rem;text-align:center" onclick="toggleSearchSubtree('${sfid}c')">&#9654;</span>`;
+        } else {
+            html += `<span style="width:0.8rem"></span>`;
+        }
+
+        if (!noselect) {
+            html += `<label style="color:#cbd5e1;display:flex;align-items:center;gap:0.25rem;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" class="search-folder-cb" value="${escAttr(f.path)}" data-sfid="${sfid}" onchange="onSearchFolderCheck(this)"> ${esc(f.name)}
+            </label>`;
+        } else {
+            html += `<span style="color:#64748b">${esc(f.name)}</span>`;
+        }
+
+        html += `</div>`;
+        if (hasChildren) {
+            html += `<div id="${sfid}c" style="display:none">${_renderSearchTree(f.children, depth + 1)}</div>`;
+        }
+        html += `</div>`;
+    }
+    return html;
+}
+
+function toggleSearchSubtree(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const visible = el.style.display !== 'none';
+    el.style.display = visible ? 'none' : 'block';
+    const toggle = el.previousElementSibling?.querySelector('span');
+    if (toggle) toggle.innerHTML = visible ? '&#9654;' : '&#9660;';
+}
+
+function onSearchFolderCheck(cb) {
+    // Propagate to children
+    const sfid = cb.dataset.sfid;
+    const childContainer = document.getElementById(sfid + 'c');
+    if (childContainer) {
+        childContainer.querySelectorAll('.search-folder-cb').forEach(child => child.checked = cb.checked);
+    }
+    updateSearchFoldersCount();
+}
+
+function searchFoldersSelectAll(checked) {
+    document.querySelectorAll('.search-folder-cb').forEach(cb => cb.checked = checked);
+    updateSearchFoldersCount();
+}
+
+function getSearchSelectedFolders() {
+    return [...document.querySelectorAll('.search-folder-cb:checked')].map(cb => cb.value);
+}
+
+function updateSearchFoldersCount() {
+    const checked = getSearchSelectedFolders().length;
+    const total = document.querySelectorAll('.search-folder-cb').length;
+    document.getElementById('search-folders-count').textContent = checked ? checked + '/' + total + ' selectionne(s)' : 'dossier actif';
+}
+
+async function loadMessages(page) {
+    if (page !== undefined) explorerCurrentPage = page;
+    const accountId = explorerCurrentAccount;
+    const folder = explorerCurrentFolder;
+    if (!accountId || !folder) return;
+
+    const msgEl = document.getElementById('explorer-messages');
+    msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Chargement...</p>';
+    document.getElementById('explorer-folder-name').textContent = folder;
+
+    try {
+        const params = new URLSearchParams({ folder, page: explorerCurrentPage, size: 50 });
+        if (explorerSearchQuery) params.set('q', explorerSearchQuery);
+        const data = await api(`/accounts/${accountId}/messages?${params}`);
+        const label = explorerSearchQuery ? `${data.total} resultats` : `${data.total} messages`;
+        document.getElementById('explorer-folder-count').textContent = label;
+
+        if (!data.messages.length) {
+            msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Dossier vide</p>';
+        } else {
+            msgEl.innerHTML = data.messages.map(m => {
+                let icons = '';
+                if (m.flagged) icons += '<span class="icon-flag" title="Important">&#9733;</span>';
+                if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
+                return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}">
+                    <div class="mail-icons">${icons}</div>
+                    <div class="mail-from">${esc(m.from)}</div>
+                    <div class="mail-subject">${esc(m.subject) || '<em style="color:#64748b">(sans sujet)</em>'}</div>
+                    <div class="mail-date">${esc(m.date)}</div>
+                </div>`;
+            }).join('');
+        }
+
+        const totalPages = Math.ceil(data.total / data.size);
+        const pagerEl = document.getElementById('explorer-pager');
+        if (totalPages > 1) {
+            let ph = '';
+            if (explorerCurrentPage > 0) ph += `<button class="btn-sm" onclick="loadMessages(${explorerCurrentPage - 1})">Precedent</button>`;
+            ph += `<span style="color:#94a3b8;padding:0.4rem">Page ${explorerCurrentPage + 1} / ${totalPages}</span>`;
+            if (explorerCurrentPage < totalPages - 1) ph += `<button class="btn-sm" onclick="loadMessages(${explorerCurrentPage + 1})">Suivant</button>`;
+            pagerEl.innerHTML = ph;
+        } else pagerEl.innerHTML = '';
+    } catch(e) {
+        msgEl.innerHTML = `<p style="color:#f87171;padding:1rem">Erreur: ${esc(e.message)}</p>`;
+    }
+}
+
+async function openEmail(uid, rowEl) {
+    const overlay = document.getElementById('reading-overlay');
+    overlay.classList.remove('hidden');
+    document.getElementById('email-body').style.display = 'none';
+    document.getElementById('email-body').textContent = '';
+    document.getElementById('email-body-html').style.display = 'none';
+    document.getElementById('email-body-html').srcdoc = '';
+    document.getElementById('email-body-html-toggle').style.display = 'none';
+    document.getElementById('email-subject').textContent = '';
+    document.getElementById('reading-modal-title').textContent = 'Chargement...';
+    document.getElementById('email-from').textContent = '';
+    document.getElementById('email-to').textContent = '';
+    document.getElementById('email-cc').style.display = 'none';
+    document.getElementById('email-date').textContent = '';
+    document.getElementById('email-attachments').style.display = 'none';
+    document.getElementById('email-priority-badge').classList.add('hidden');
+    currentEmailHtml = '';
+    currentEmailData = null;
+
+    document.querySelectorAll('.mail-row').forEach(r => r.classList.remove('selected'));
+    if (rowEl) rowEl.classList.add('selected');
+
+    try {
+        const params = new URLSearchParams({ folder: explorerCurrentFolder });
+        const data = await api(`/accounts/${explorerCurrentAccount}/message/${uid}?${params}`);
+        currentEmailData = data;
+        updateActionBar();
+
+        document.getElementById('email-subject').textContent = data.subject || '(sans sujet)';
+        document.getElementById('reading-modal-title').textContent = data.subject || '(sans sujet)';
+        document.getElementById('email-from').textContent = 'De: ' + data.from;
+        document.getElementById('email-to').textContent = 'A: ' + data.to;
+        if (data.cc) { document.getElementById('email-cc').textContent = 'Cc: ' + data.cc; document.getElementById('email-cc').style.display = 'block'; }
+        document.getElementById('email-date').textContent = data.date;
+
+        // Priority badge
+        if (data.priority === 'high') {
+            document.getElementById('email-priority-badge').classList.remove('hidden');
+            document.getElementById('email-priority-badge').textContent = 'URGENT';
+            document.getElementById('email-priority-badge').style.background = '#ef4444';
+        } else if (data.priority === 'low') {
+            document.getElementById('email-priority-badge').classList.remove('hidden');
+            document.getElementById('email-priority-badge').textContent = 'BASSE';
+            document.getElementById('email-priority-badge').style.background = '#64748b';
+        }
+
+        // Toolbar buttons
+        document.getElementById('btn-read-toggle').textContent = data.seen ? 'Non lu' : 'Lu';
+        document.getElementById('btn-flag-toggle').textContent = data.flagged ? 'Retirer important' : 'Important';
+
+        // Attachments
+        if (data.attachments && data.attachments.length) {
+            const attEl = document.getElementById('email-attachments');
+            attEl.style.display = 'block';
+            attEl.innerHTML = '<span style="color:#94a3b8;font-size:0.85rem">Pieces jointes: </span>' +
+                data.attachments.map((a, idx) =>
+                    `<a href="#" onclick="event.preventDefault();downloadAttachment(${idx})"
+                        style="background:#334155;padding:0.15rem 0.5rem;border-radius:4px;font-size:0.8rem;color:#38bdf8;margin-right:0.25rem;text-decoration:none;cursor:pointer"
+                    >${esc(a.filename)} <span style="color:#64748b">(${formatSize(a.size)})</span></a>`
+                ).join('');
+        }
+
+        document.getElementById('email-body').textContent = data.body_text || '(pas de contenu texte)';
+        if (data.body_html) {
+            currentEmailHtml = data.body_html;
+            // Show HTML by default
+            const iframe = document.getElementById('email-body-html');
+            iframe.style.display = 'block';
+            iframe.srcdoc = currentEmailHtml;
+            document.getElementById('email-body').style.display = 'none';
+            document.getElementById('email-body-html-toggle').style.display = 'block';
+            document.getElementById('btn-html-toggle').textContent = 'Voir en texte';
+        } else {
+            // No HTML — show text
+            document.getElementById('email-body').style.display = 'block';
+            document.getElementById('email-body-html').style.display = 'none';
+        }
+        overlay.querySelector('.modal-body').scrollTop = 0;
+    } catch(e) {
+        document.getElementById('email-body').textContent = 'Erreur: ' + e.message;
+    }
+}
+
+function closeReadingPane() {
+    document.getElementById('reading-overlay').classList.add('hidden');
+    document.querySelectorAll('.mail-row').forEach(r => r.classList.remove('selected'));
+    currentEmailData = null;
+    updateActionBar();
+}
+
+function toggleHtmlView() {
+    const iframe = document.getElementById('email-body-html');
+    const btn = document.getElementById('btn-html-toggle');
+    const textBody = document.getElementById('email-body');
+    if (iframe.style.display !== 'none') {
+        iframe.style.display = 'none'; textBody.style.display = 'block'; btn.textContent = 'Voir en HTML';
+    } else {
+        iframe.style.display = 'block'; textBody.style.display = 'none';
+        iframe.srcdoc = currentEmailHtml; btn.textContent = 'Voir en texte';
+    }
+}
+
+async function downloadAttachment(index) {
+    if (!currentEmailData) return;
+    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    const url = `/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}/attachment/${index}?${params}`;
+    const resp = await apiRaw(url);
+    if (!resp.ok) { alert('Erreur de telechargement'); return; }
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = currentEmailData.attachments[index]?.filename || 'attachment';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+}
+
+// ===========================================================================
+// EMAIL ACTIONS — flags, move, delete
+// ===========================================================================
+
+async function toggleReadStatus() {
+    if (!currentEmailData) return;
+    const uid = currentEmailData.uid;
+    const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
+    const isSeen = row ? row.dataset.seen === 'true' : currentEmailData.seen;
+    const action = isSeen ? 'remove' : 'add';
+    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, {
+            method: 'POST', body: JSON.stringify({ flag: 'seen', action })
+        });
+        if (row) { row.dataset.seen = String(!isSeen); if (isSeen) row.classList.add('unread'); else row.classList.remove('unread'); }
+        document.getElementById('btn-read-toggle').textContent = isSeen ? 'Lu' : 'Non lu';
+        currentEmailData.seen = !isSeen;
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+async function toggleFlagStatus() {
+    if (!currentEmailData) return;
+    const uid = currentEmailData.uid;
+    const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
+    const isFlagged = row ? row.dataset.flagged === 'true' : currentEmailData.flagged;
+    const action = isFlagged ? 'remove' : 'add';
+    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, {
+            method: 'POST', body: JSON.stringify({ flag: 'flagged', action })
+        });
+        if (row) {
+            row.dataset.flagged = String(!isFlagged);
+            const iconsEl = row.querySelector('.mail-icons');
+            const star = iconsEl.querySelector('.icon-flag');
+            if (isFlagged && star) star.remove();
+            else if (!isFlagged) iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-flag" title="Important">&#9733;</span>');
+        }
+        document.getElementById('btn-flag-toggle').textContent = isFlagged ? 'Important' : 'Retirer important';
+        currentEmailData.flagged = !isFlagged;
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+async function deleteCurrentEmail() {
+    if (!currentEmailData || !confirm('Supprimer cet email ?')) return;
+    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}?${params}`, { method: 'DELETE' });
+        closeReadingPane();
+        await loadMessages();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+function showMoveDialog(evt) {
+    closePopup();
+    const popup = document.createElement('div');
+    popup.className = 'popup-menu';
+    popup.id = 'active-popup';
+    popup.style.top = Math.min(evt.clientY + 5, window.innerHeight - 320) + 'px';
+    popup.style.left = Math.min(evt.clientX - 80, window.innerWidth - 220) + 'px';
+    let html = '<div class="popup-menu-title">Deplacer vers:</div>';
+    for (const f of explorerFoldersCache) {
+        if (f.path === explorerCurrentFolder) continue;
+        html += `<div class="popup-item" data-path="${escAttr(f.path)}" onclick="moveToFolder(this.dataset.path)">${esc(f.path)}</div>`;
+    }
+    popup.innerHTML = html;
+    document.body.appendChild(popup);
+    setTimeout(() => document.addEventListener('click', closePopupHandler), 10);
+}
+
+function closePopup() {
+    const p = document.getElementById('active-popup');
+    if (p) p.remove();
+    document.removeEventListener('click', closePopupHandler);
+}
+function closePopupHandler(e) {
+    const p = document.getElementById('active-popup');
+    if (p && !p.contains(e.target)) closePopup();
+}
+
+async function moveToFolder(targetFolder) {
+    if (!currentEmailData) return;
+    closePopup();
+    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}/move?${params}`, {
+            method: 'POST', body: JSON.stringify({ target_folder: targetFolder })
+        });
+        closeReadingPane();
+        await loadMessages();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+// ===========================================================================
+// COMPOSE — new message, reply, reply all, forward, drafts
+// ===========================================================================
+
+let composeAttachments = [];
+
+function openCompose(prefill) {
+    prefill = prefill || {};
+    document.getElementById('compose-overlay').classList.remove('hidden');
+
+    // Account selector — only SMTP-capable accounts
+    const fromSel = document.getElementById('compose-from');
+    fromSel.innerHTML = '';
+    const smtpAccounts = accountsCache.filter(a => a.smtp_host);
+    if (!smtpAccounts.length) {
+        fromSel.innerHTML = '<option value="">Aucun compte SMTP configure</option>';
+    } else {
+        for (const a of smtpAccounts) {
+            fromSel.innerHTML += `<option value="${a.id}" ${a.id == explorerCurrentAccount ? 'selected' : ''}>${esc(a.name)} (${esc(a.imap_user)})</option>`;
+        }
+    }
+
+    document.getElementById('compose-title').textContent = prefill.title || 'Nouveau message';
+    document.getElementById('compose-to').value = prefill.to || '';
+    document.getElementById('compose-cc').value = prefill.cc || '';
+    document.getElementById('compose-bcc').value = '';
+    document.getElementById('compose-subject').value = prefill.subject || '';
+    document.getElementById('compose-priority').value = prefill.priority || '';
+    document.getElementById('compose-read-receipt').checked = false;
+    document.getElementById('compose-delivery-receipt').checked = false;
+    document.getElementById('compose-status').textContent = '';
+    document.getElementById('compose-send-btn').disabled = false;
+    if (prefill.cc) document.getElementById('compose-cc-bcc').classList.remove('hidden');
+    else document.getElementById('compose-cc-bcc').classList.add('hidden');
+
+    composeAttachments = [];
+    document.getElementById('compose-attachments-list').innerHTML = '';
+    document.getElementById('compose-files').value = '';
+
+    // Store reply metadata
+    const overlay = document.getElementById('compose-overlay');
+    overlay.dataset.inReplyTo = prefill.in_reply_to || '';
+    overlay.dataset.references = prefill.references || '';
+
+    // Init TinyMCE rich text editor
+    tinymce.remove('#compose-editor');
+    const initialContent = prefill.body_html || (prefill.body ? '<pre>' + esc(prefill.body) + '</pre>' : '');
+    tinymce.init({
+        selector: '#compose-editor',
+        skin: 'oxide-dark',
+        content_css: 'dark',
+        height: '100%',
+        menubar: false,
+        statusbar: false,
+        plugins: 'lists link image table code',
+        toolbar: 'undo redo | bold italic underline strikethrough | forecolor backcolor | bullist numlist | link image table | alignleft aligncenter alignright | code',
+        content_style: 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: #e2e8f0; background: #0f172a; }',
+        setup: function(editor) {
+            editor.on('init', function() {
+                editor.setContent(initialContent);
+                if (!prefill.to) return;
+                editor.focus();
+            });
+        }
+    });
+
+    if (!prefill.to) setTimeout(() => document.getElementById('compose-to').focus(), 100);
+}
+
+function closeCompose() {
+    tinymce.remove('#compose-editor');
+    document.getElementById('compose-overlay').classList.add('hidden');
+    composeAttachments = [];
+}
+
+function replyEmail() {
+    if (!currentEmailData) return;
+    const d = currentEmailData;
+    const replyTo = d.reply_to || d.from;
+    const subject = d.subject.startsWith('Re:') ? d.subject : 'Re: ' + d.subject;
+    const quoteHeader = `<br><br><div style="border-left:2px solid #38bdf8;padding-left:0.75rem;color:#94a3b8">
+        <p><strong>Le ${esc(d.date)}, ${esc(d.from)} a ecrit :</strong></p>
+        ${d.body_html || '<pre>' + esc(d.body_text || '') + '</pre>'}
+    </div>`;
+    openCompose({
+        title: 'Repondre',
+        to: replyTo,
+        subject,
+        body_html: quoteHeader,
+        in_reply_to: d.message_id,
+        references: (d.references ? d.references + ' ' : '') + d.message_id,
+    });
+}
+
+function replyAllEmail() {
+    if (!currentEmailData) return;
+    const d = currentEmailData;
+    const replyTo = d.reply_to || d.from;
+    const subject = d.subject.startsWith('Re:') ? d.subject : 'Re: ' + d.subject;
+    const quoteHeader = `<br><br><div style="border-left:2px solid #38bdf8;padding-left:0.75rem;color:#94a3b8">
+        <p><strong>Le ${esc(d.date)}, ${esc(d.from)} a ecrit :</strong></p>
+        ${d.body_html || '<pre>' + esc(d.body_text || '') + '</pre>'}
+    </div>`;
+    const currentAccount = accountsCache.find(a => a.id == explorerCurrentAccount);
+    const myEmail = currentAccount ? currentAccount.imap_user.toLowerCase() : '';
+    const allRecipients = [d.to, d.cc].filter(Boolean).join(', ');
+    const ccList = allRecipients.split(',').map(e => e.trim()).filter(e => e && !e.toLowerCase().includes(myEmail));
+    openCompose({
+        title: 'Repondre a tous',
+        to: replyTo,
+        cc: ccList.join(', '),
+        subject,
+        body_html: quoteHeader,
+        in_reply_to: d.message_id,
+        references: (d.references ? d.references + ' ' : '') + d.message_id,
+    });
+}
+
+function forwardEmail() {
+    if (!currentEmailData) return;
+    const d = currentEmailData;
+    const subject = d.subject.startsWith('Fwd:') ? d.subject : 'Fwd: ' + d.subject;
+    const fwdHtml = `<br><br><div style="border-left:2px solid #94a3b8;padding-left:0.75rem;color:#94a3b8">
+        <p><strong>--- Message transfere ---</strong><br>
+        De: ${esc(d.from)}<br>A: ${esc(d.to)}<br>${d.cc ? 'Cc: ' + esc(d.cc) + '<br>' : ''}Date: ${esc(d.date)}<br>Objet: ${esc(d.subject)}</p>
+        ${d.body_html || '<pre>' + esc(d.body_text || '') + '</pre>'}
+    </div>`;
+    openCompose({ title: 'Transferer', subject, body_html: fwdHtml });
+}
+
+function handleFileSelect() {
+    const input = document.getElementById('compose-files');
+    for (const file of input.files) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            composeAttachments.push({
+                filename: file.name,
+                data_base64: e.target.result.split(',')[1],
+                size: file.size,
+            });
+            renderComposeAttachments();
+        };
+        reader.readAsDataURL(file);
+    }
+    input.value = '';
+}
+
+function renderComposeAttachments() {
+    document.getElementById('compose-attachments-list').innerHTML = composeAttachments.map((a, i) =>
+        `<span class="attachment-chip">${esc(a.filename)} (${formatSize(a.size)}) <span class="remove-att" onclick="removeAttachment(${i})">&times;</span></span>`
+    ).join('');
+}
+
+function removeAttachment(i) { composeAttachments.splice(i, 1); renderComposeAttachments(); }
+
+async function sendComposedEmail() {
+    const accountId = document.getElementById('compose-from').value;
+    if (!accountId) { alert('Selectionnez un compte avec SMTP configure'); return; }
+    const to = document.getElementById('compose-to').value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!to.length) { alert('Saisissez au moins un destinataire'); return; }
+
+    const overlay = document.getElementById('compose-overlay');
+    const statusEl = document.getElementById('compose-status');
+    const sendBtn = document.getElementById('compose-send-btn');
+    sendBtn.disabled = true;
+    statusEl.textContent = 'Envoi en cours...';
+    statusEl.style.color = '#94a3b8';
+
+    try {
+        const editor = tinymce.get('compose-editor');
+        const bodyHtml = editor ? editor.getContent() : '';
+        const bodyText = editor ? editor.getContent({format: 'text'}) : '';
+        await api(`/accounts/${accountId}/send`, {
+            method: 'POST',
+            body: JSON.stringify({
+                to,
+                cc: document.getElementById('compose-cc').value.split(',').map(s => s.trim()).filter(Boolean),
+                bcc: document.getElementById('compose-bcc').value.split(',').map(s => s.trim()).filter(Boolean),
+                subject: document.getElementById('compose-subject').value,
+                body_text: bodyText,
+                body_html: bodyHtml,
+                attachments: composeAttachments,
+                in_reply_to: overlay.dataset.inReplyTo || null,
+                references: overlay.dataset.references || null,
+                priority: document.getElementById('compose-priority').value || null,
+                request_read_receipt: document.getElementById('compose-read-receipt').checked,
+                request_delivery_receipt: document.getElementById('compose-delivery-receipt').checked,
+            })
+        });
+        statusEl.textContent = 'Email envoye !';
+        statusEl.style.color = '#4ade80';
+        setTimeout(closeCompose, 1500);
+    } catch(e) {
+        statusEl.textContent = 'Erreur: ' + e.message;
+        statusEl.style.color = '#f87171';
+        sendBtn.disabled = false;
+    }
+}
+
+async function saveDraft() {
+    const accountId = document.getElementById('compose-from').value;
+    if (!accountId) { alert('Selectionnez un compte'); return; }
+    const statusEl = document.getElementById('compose-status');
+    statusEl.textContent = 'Sauvegarde...'; statusEl.style.color = '#94a3b8';
+    try {
+        const editor = tinymce.get('compose-editor');
+        const bodyHtml = editor ? editor.getContent() : '';
+        const bodyText = editor ? editor.getContent({format: 'text'}) : '';
+        await api(`/accounts/${accountId}/save-draft`, {
+            method: 'POST',
+            body: JSON.stringify({
+                to: document.getElementById('compose-to').value.split(',').map(s => s.trim()).filter(Boolean),
+                cc: document.getElementById('compose-cc').value.split(',').map(s => s.trim()).filter(Boolean),
+                bcc: document.getElementById('compose-bcc').value.split(',').map(s => s.trim()).filter(Boolean),
+                subject: document.getElementById('compose-subject').value,
+                body_text: bodyText,
+                body_html: bodyHtml,
+                attachments: composeAttachments,
+                priority: document.getElementById('compose-priority').value || null,
+            })
+        });
+        statusEl.textContent = 'Brouillon sauvegarde !'; statusEl.style.color = '#4ade80';
+    } catch(e) { statusEl.textContent = 'Erreur: ' + e.message; statusEl.style.color = '#f87171'; }
+}
+
+// ===========================================================================
+// ADMIN PANEL
+// ===========================================================================
+
+async function loadAdminPanel() {
+    loadAdminSettings();
+    loadAdminUsers();
+}
+
+async function loadAdminSettings() {
+    const el = document.getElementById('admin-settings-list');
+    try {
+        const settings = await api('/admin/settings');
+        el.innerHTML = settings.map(s => `
+            <div class="compose-field" style="margin-bottom:0.5rem">
+                <label>${esc(s.description || s.key)}</label>
+                <div style="position:relative">
+                    <input type="${s.is_encrypted ? 'password' : 'text'}"
+                        id="admin-setting-${s.key}"
+                        value="${escAttr(s.value || '')}"
+                        placeholder="${esc(s.key)}"
+                        class="input-field" style="width:100%;padding-right:${s.is_encrypted ? '3rem' : '0.5rem'}">
+                    ${s.is_encrypted ? `<button type="button" onclick="togglePasswordVisibility('admin-setting-${s.key}', this)" style="position:absolute;right:0.5rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;padding:0.25rem">&#128065;</button>` : ''}
+                </div>
+            </div>
+        `).join('');
+    } catch(e) {
+        el.innerHTML = `<p style="color:#f87171">${esc(e.message)}</p>`;
+    }
+}
+
+async function saveAdminSettings() {
+    const statusEl = document.getElementById('admin-settings-status');
+    statusEl.textContent = 'Sauvegarde...';
+    statusEl.style.color = '#94a3b8';
+    try {
+        const inputs = document.querySelectorAll('[id^="admin-setting-"]');
+        const updates = [];
+        inputs.forEach(input => {
+            const key = input.id.replace('admin-setting-', '');
+            const val = input.value.trim();
+            // Skip masked values (unchanged encrypted fields)
+            if (val && !val.match(/^\w{3}\*{3}\w{3}$/) && val !== '***') {
+                updates.push({ key, value: val });
+            }
+        });
+        if (!updates.length) { statusEl.textContent = 'Rien a sauvegarder'; return; }
+        await api('/admin/settings', { method: 'PUT', body: JSON.stringify(updates) });
+        statusEl.textContent = 'Sauvegarde !';
+        statusEl.style.color = '#4ade80';
+        loadAdminSettings();
+    } catch(e) {
+        statusEl.textContent = 'Erreur: ' + e.message;
+        statusEl.style.color = '#f87171';
+    }
+}
+
+async function loadAdminUsers() {
+    const el = document.getElementById('admin-users-list');
+    try {
+        const users = await api('/admin/users');
+        el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="border-bottom:1px solid #334155;color:#64748b">
+                <th style="text-align:left;padding:0.4rem">ID</th>
+                <th style="text-align:left;padding:0.4rem">Email</th>
+                <th style="text-align:left;padding:0.4rem">Username</th>
+                <th style="text-align:center;padding:0.4rem">Actif</th>
+                <th style="text-align:center;padding:0.4rem">Admin</th>
+                <th style="text-align:left;padding:0.4rem">Cree le</th>
+            </tr>
+            ${users.map(u => `<tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:0.4rem;color:#64748b">${u.id}</td>
+                <td style="padding:0.4rem;color:#38bdf8">${esc(u.email)}</td>
+                <td style="padding:0.4rem">${esc(u.username)}</td>
+                <td style="text-align:center;padding:0.4rem">
+                    <input type="checkbox" ${u.is_active ? 'checked' : ''} onchange="toggleUserFlag(${u.id}, 'is_active', this.checked)">
+                </td>
+                <td style="text-align:center;padding:0.4rem">
+                    <input type="checkbox" ${u.is_admin ? 'checked' : ''} onchange="toggleUserFlag(${u.id}, 'is_admin', this.checked)">
+                </td>
+                <td style="padding:0.4rem;color:#64748b;font-size:0.8rem">${u.created_at ? u.created_at.split('T')[0] : ''}</td>
+            </tr>`).join('')}
+        </table>`;
+
+        const info = await api('/admin/info');
+        document.getElementById('admin-info').textContent = `${info.total_users} utilisateurs (${info.active_users} actifs, ${info.admin_users} admins)`;
+    } catch(e) {
+        el.innerHTML = `<p style="color:#f87171">${esc(e.message)}</p>`;
+    }
+}
+
+async function toggleUserFlag(userId, flag, value) {
+    try {
+        await api(`/admin/users/${userId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ [flag]: value }),
+        });
+    } catch(e) {
+        alert('Erreur: ' + e.message);
+        loadAdminUsers();
+    }
+}
+
+// ===========================================================================
+// STATUS PANEL
+// ===========================================================================
+
+let statusAutoRefreshTimer = null;
+
+async function loadStatusPanel() {
+    document.getElementById('status-last-refresh').textContent = 'Chargement...';
+    try {
+        const data = await api('/admin/status');
+        renderWorkerStatus(data.worker);
+        renderESStatus(data.elasticsearch);
+        renderAccountsStatus(data.accounts);
+        renderLogsStatus(data.processing_logs);
+        document.getElementById('status-last-refresh').textContent =
+            'Mis a jour: ' + new Date().toLocaleTimeString('fr-FR');
+    } catch(e) {
+        document.getElementById('status-last-refresh').textContent = 'Erreur: ' + e.message;
+    }
+}
+
+function toggleStatusAutoRefresh() {
+    if (document.getElementById('status-auto-refresh').checked) {
+        statusAutoRefreshTimer = setInterval(loadStatusPanel, 30000);
+    } else {
+        clearInterval(statusAutoRefreshTimer);
+        statusAutoRefreshTimer = null;
+    }
+}
+
+function renderWorkerStatus(worker) {
+    const el = document.getElementById('status-worker');
+    if (!worker) { el.innerHTML = '<p style="color:#64748b">Aucune donnee</p>'; return; }
+
+    const statusColor = worker.status === 'online' ? '#4ade80' : worker.status === 'offline' ? '#f87171' : '#fbbf24';
+    const statusLabel = worker.status === 'online' ? 'En ligne' : worker.status === 'offline' ? 'Hors ligne' : 'Erreur';
+
+    let html = `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${statusColor}"></span>
+        <span style="font-weight:600;color:${statusColor}">${statusLabel}</span>
+    </div>`;
+
+    if (worker.active_tasks && Object.keys(worker.active_tasks).length) {
+        html += '<div style="font-size:0.85rem;color:#94a3b8;margin-bottom:0.3rem">Taches actives :</div>';
+        for (const [w, count] of Object.entries(worker.active_tasks)) {
+            html += `<div style="font-size:0.8rem;color:#e2e8f0;padding-left:1rem">${esc(w.split('@')[1] || w)}: <strong>${count}</strong> en cours</div>`;
+        }
+    } else if (worker.status === 'online') {
+        html += '<div style="font-size:0.85rem;color:#64748b">Aucune tache en cours</div>';
+    }
+
+    if (worker.registered_tasks && worker.registered_tasks.length) {
+        html += '<div style="font-size:0.85rem;color:#94a3b8;margin-top:0.5rem">Taches enregistrees :</div>';
+        html += '<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.2rem">';
+        for (const t of worker.registered_tasks) {
+            const shortName = t.split('.').pop();
+            html += `<span style="background:#334155;padding:0.15rem 0.5rem;border-radius:4px;font-size:0.75rem;color:#94a3b8">${esc(shortName)}</span>`;
+        }
+        html += '</div>';
+    }
+
+    if (worker.error) {
+        html += `<div style="font-size:0.85rem;color:#f87171;margin-top:0.3rem">${esc(worker.error)}</div>`;
+    }
+
+    el.innerHTML = html;
+}
+
+function renderESStatus(esList) {
+    const el = document.getElementById('status-es');
+    if (!esList || !esList.length) { el.innerHTML = '<p style="color:#64748b">Aucun index</p>'; return; }
+    if (esList[0] && esList[0].error) {
+        el.innerHTML = `<p style="color:#f87171">${esc(esList[0].error)}</p>`;
+        return;
+    }
+
+    let html = `<table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <tr style="border-bottom:1px solid #334155;color:#64748b">
+            <th style="text-align:left;padding:0.4rem">Index</th>
+            <th style="text-align:right;padding:0.4rem">Documents</th>
+            <th style="text-align:right;padding:0.4rem">Taille</th>
+            <th style="text-align:center;padding:0.4rem">Sante</th>
+            <th style="text-align:center;padding:0.4rem">Statut</th>
+        </tr>`;
+
+    for (const idx of esList) {
+        const healthColor = idx.health === 'green' ? '#4ade80' : idx.health === 'yellow' ? '#fbbf24' : '#f87171';
+        html += `<tr style="border-bottom:1px solid #1e293b">
+            <td style="padding:0.4rem;color:#38bdf8">${esc(idx.index)}</td>
+            <td style="padding:0.4rem;text-align:right;color:#e2e8f0;font-weight:600">${Number(idx.docs_count).toLocaleString('fr-FR')}</td>
+            <td style="padding:0.4rem;text-align:right;color:#94a3b8">${idx.store_size}</td>
+            <td style="padding:0.4rem;text-align:center"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${healthColor}"></span></td>
+            <td style="padding:0.4rem;text-align:center;color:#94a3b8">${idx.status}</td>
+        </tr>`;
+    }
+    html += '</table>';
+    el.innerHTML = html;
+}
+
+function _statusProgressBar(indexed, total) {
+    if (!total || total === 0) return '';
+    const pct = Math.min(100, Math.round(indexed / total * 100));
+    const color = pct >= 100 ? '#4ade80' : pct >= 50 ? '#fbbf24' : '#f87171';
+    return `<div style="display:flex;align-items:center;gap:0.5rem">
+        <div style="flex:1;background:#1e293b;border-radius:3px;height:6px;min-width:80px">
+            <div style="width:${pct}%;background:${color};border-radius:3px;height:100%;transition:width 0.3s"></div>
+        </div>
+        <span style="font-size:0.75rem;color:${color};white-space:nowrap">${pct}%</span>
+    </div>`;
+}
+
+function renderAccountsStatus(accounts) {
+    const el = document.getElementById('status-accounts');
+    if (!accounts || !accounts.length) { el.innerHTML = '<p style="color:#64748b">Aucun compte</p>'; return; }
+
+    let html = '';
+    for (const acct of accounts) {
+        const syncColor = acct.sync_enabled ? '#4ade80' : '#64748b';
+        const syncLabel = acct.sync_enabled ? 'Actif' : 'Desactive';
+        const lastSync = acct.last_sync_at ? new Date(acct.last_sync_at).toLocaleString('fr-FR') : 'Jamais';
+        const imapTotal = acct.imap_total || 0;
+        const esTotal = acct.es_total || 0;
+        const pct = imapTotal > 0 ? Math.round(esTotal / imapTotal * 100) : 0;
+        const pctColor = pct >= 95 ? '#4ade80' : pct >= 50 ? '#fbbf24' : '#f87171';
+
+        html += `<div style="background:#0f172a;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${syncColor}"></span>
+                <strong style="color:#e2e8f0">${esc(acct.name)}</strong>
+                <span style="color:#64748b;font-size:0.8rem">(${esc(acct.imap_user)})</span>
+                <span style="color:${syncColor};font-size:0.8rem;margin-left:auto">${syncLabel}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0.3rem;font-size:0.8rem;color:#94a3b8;margin-bottom:0.5rem">
+                <div>Dernier sync: <span style="color:#e2e8f0">${lastSync}</span></div>
+                <div>Dossiers: <span style="color:#e2e8f0">${acct.folders_synced || 0}</span></div>
+            </div>
+            <div style="background:#1e293b;border-radius:6px;padding:0.6rem;margin-bottom:0.4rem">
+                <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.4rem">
+                    <span style="font-size:0.85rem;color:#e2e8f0;font-weight:600">Indexation</span>
+                    <span style="font-size:0.85rem;color:${pctColor};font-weight:600">${esTotal.toLocaleString('fr-FR')} / ${imapTotal.toLocaleString('fr-FR')} mails</span>
+                    <span style="font-size:0.8rem;color:${pctColor}">(${pct}%)</span>
+                </div>
+                ${_statusProgressBar(esTotal, imapTotal)}
+            </div>`;
+
+        if (acct.imap_error) {
+            html += `<div style="font-size:0.8rem;color:#f87171;margin-bottom:0.3rem">IMAP: ${esc(acct.imap_error)}</div>`;
+        }
+
+        // Per-folder detail (collapsible)
+        if (acct.folder_details && acct.folder_details.length > 0) {
+            const stateId = 'sync-state-' + acct.id;
+            const missingCount = acct.folder_details.filter(f => f.imap_messages > 0 && f.es_indexed < f.imap_messages).length;
+            const missingLabel = missingCount > 0 ? ` - <span style="color:#fbbf24">${missingCount} incomplets</span>` : ' - <span style="color:#4ade80">tous complets</span>';
+            html += `<div>
+                <span style="color:#64748b;font-size:0.75rem;cursor:pointer;text-decoration:underline" onclick="document.getElementById('${stateId}').classList.toggle('hidden')">
+                    Detail par dossier (${acct.folder_details.length})${missingLabel}
+                </span>
+                <div id="${stateId}" class="hidden" style="margin-top:0.3rem;max-height:350px;overflow-y:auto">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.75rem">
+                        <tr style="color:#475569;position:sticky;top:0;background:#0f172a">
+                            <th style="text-align:left;padding:0.25rem">Dossier</th>
+                            <th style="text-align:right;padding:0.25rem">IMAP</th>
+                            <th style="text-align:right;padding:0.25rem">ES</th>
+                            <th style="text-align:center;padding:0.25rem;min-width:100px">Progression</th>
+                            <th style="text-align:right;padding:0.25rem">UID max</th>
+                        </tr>`;
+            for (const f of acct.folder_details) {
+                const im = f.imap_messages != null ? f.imap_messages : '-';
+                const es = f.es_indexed || 0;
+                const uid = f.last_uid || '-';
+                const imapN = f.imap_messages || 0;
+                const rowColor = (imapN > 0 && es < imapN) ? '#fbbf2433' : 'transparent';
+                html += `<tr style="border-bottom:1px solid #1e293b;background:${rowColor}">
+                    <td style="padding:0.25rem;color:#94a3b8;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(f.folder)}">${esc(f.folder)}</td>
+                    <td style="padding:0.25rem;text-align:right;color:#e2e8f0">${typeof im === 'number' ? im.toLocaleString('fr-FR') : im}</td>
+                    <td style="padding:0.25rem;text-align:right;color:#38bdf8">${es.toLocaleString('fr-FR')}</td>
+                    <td style="padding:0.25rem">${imapN > 0 ? _statusProgressBar(es, imapN) : '<span style="color:#475569;font-size:0.7rem">vide</span>'}</td>
+                    <td style="padding:0.25rem;text-align:right;color:#64748b">${esc(String(uid))}</td>
+                </tr>`;
+            }
+            html += '</table></div></div>';
+        }
+        html += '</div>';
+    }
+    el.innerHTML = html;
+}
+
+function renderLogsStatus(logsData) {
+    const el = document.getElementById('status-logs');
+    if (!logsData) { el.innerHTML = '<p style="color:#64748b">Aucune donnee</p>'; return; }
+
+    let html = `<div style="margin-bottom:0.5rem;font-size:0.85rem;color:#94a3b8">
+        Total: <strong style="color:#e2e8f0">${logsData.total}</strong> actions enregistrees
+    </div>`;
+
+    if (logsData.recent && logsData.recent.length) {
+        html += `<div style="max-height:350px;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+            <tr style="border-bottom:1px solid #334155;color:#64748b;position:sticky;top:0;background:#1e293b">
+                <th style="text-align:left;padding:0.3rem">Date</th>
+                <th style="text-align:left;padding:0.3rem">Dossier</th>
+                <th style="text-align:left;padding:0.3rem">UID</th>
+                <th style="text-align:left;padding:0.3rem">Action</th>
+                <th style="text-align:left;padding:0.3rem">Detail</th>
+            </tr>`;
+        for (const log of logsData.recent) {
+            const date = log.created_at ? new Date(log.created_at).toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'}) : '';
+            const actionColor = log.action === 'move' ? '#38bdf8' : log.action === 'flag' ? '#fbbf24' : '#4ade80';
+            const detail = log.detail ? (log.detail.target || JSON.stringify(log.detail)) : '';
+            html += `<tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:0.3rem;color:#64748b;white-space:nowrap">${date}</td>
+                <td style="padding:0.3rem;color:#94a3b8;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(log.folder || '')}">${esc(log.folder || '')}</td>
+                <td style="padding:0.3rem;color:#64748b">${esc(log.mail_uid)}</td>
+                <td style="padding:0.3rem;color:${actionColor};font-weight:500">${esc(log.action)}</td>
+                <td style="padding:0.3rem;color:#94a3b8;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(detail)}">${esc(detail)}</td>
+            </tr>`;
+        }
+        html += '</table></div>';
+    } else {
+        html += '<p style="color:#64748b;font-size:0.85rem">Aucun traitement enregistre</p>';
+    }
+    el.innerHTML = html;
+}
+
+// ===========================================================================
+// MODAL FULLSCREEN
+// ===========================================================================
+
+function toggleModalFullscreen(btn) {
+    const panel = btn.closest('.modal-panel');
+    panel.classList.toggle('modal-fullscreen');
+    btn.textContent = panel.classList.contains('modal-fullscreen') ? '\u2750' : '\u26F6';
+    btn.title = panel.classList.contains('modal-fullscreen') ? 'Restaurer' : 'Plein ecran';
+}
+
+// ===========================================================================
+// FOLDER MANAGEMENT
+// ===========================================================================
+
+async function promptCreateFolder() {
+    if (!explorerCurrentAccount) return;
+    const parent = explorerCurrentFolder || '';
+    const parentLabel = parent ? ` dans "${parent}"` : ' (racine)';
+    const name = prompt(`Nom du sous-dossier${parentLabel} :`);
+    if (!name || !name.trim()) return;
+    const folderName = parent ? parent + explorerSeparator + name.trim() : name.trim();
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/create-folder`, {
+            method: 'POST',
+            body: JSON.stringify({ folder_name: folderName }),
+        });
+        await loadFolders();
+        // Auto-expand parent and select new folder
+        if (parent) {
+            const fid = 'f-' + btoa(unescape(encodeURIComponent(parent))).replace(/[^a-zA-Z0-9]/g, '') + 'c';
+            const childEl = document.getElementById(fid);
+            if (childEl) childEl.style.display = 'block';
+        }
+        await selectFolder(folderName);
+    } catch(e) {
+        alert('Erreur: ' + e.message);
+    }
+}
+
+async function promptDeleteFolder() {
+    if (!explorerCurrentAccount || !explorerCurrentFolder) return;
+    if (!confirm(`Supprimer le dossier "${explorerCurrentFolder}" ?\n\nCette action est irreversible.`)) return;
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/delete-folder`, {
+            method: 'POST',
+            body: JSON.stringify({ folder_name: explorerCurrentFolder }),
+        });
+        explorerCurrentFolder = '';
+        document.getElementById('btn-delete-folder').style.display = 'none';
+        document.getElementById('explorer-messages').innerHTML = '';
+        document.getElementById('explorer-folder-name').textContent = '';
+        document.getElementById('explorer-folder-count').textContent = '';
+        await loadFolders();
+    } catch(e) {
+        alert('Erreur: ' + e.message);
+    }
+}
+
+// === Utilities ===
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' o';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' Ko';
+    return (bytes / 1048576).toFixed(1) + ' Mo';
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function escAttr(s) { return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Keyboard shortcuts
+function isTyping() {
+    const tag = document.activeElement.tagName;
+    if (['INPUT','TEXTAREA','SELECT'].includes(tag)) return true;
+    if (document.activeElement.closest('.tox-tinymce')) return true;
+    return false;
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const compose = document.getElementById('compose-overlay');
+        if (!compose.classList.contains('hidden')) { closeCompose(); return; }
+        const reading = document.getElementById('reading-overlay');
+        if (!reading.classList.contains('hidden')) { closeReadingPane(); return; }
+        closePopup();
+    }
+    if (e.key === 'n' && !isTyping() && explorerCurrentAccount) { openCompose(); }
+    if (e.key === 'r' && !isTyping() && currentEmailData) { replyEmail(); }
+    if (e.key === 'Delete' && !isTyping() && currentEmailData) { deleteCurrentEmail(); }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,409 @@
+"""
+IMAP Manager — handles all IMAP operations.
+All actions are performed on the real mail server (source of truth).
+"""
+import imaplib
+import email
+import email.utils
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+
+from src.rules.engine import EmailContext
+
+logger = logging.getLogger(__name__)
+
+PROCESSED_FLAG = "X-MailIA-Processed"
+
+
+def _imap_quote(folder: str) -> str:
+    """Quote folder name for IMAP commands (RFC 3501)."""
+    if folder.startswith('"') and folder.endswith('"'):
+        return folder
+    escaped = folder.replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+@dataclass
+class IMAPConfig:
+    host: str
+    port: int
+    ssl: bool
+    user: str
+    password: str
+
+
+class IMAPManager:
+    """Manages IMAP connection and operations for a single mail account."""
+
+    def __init__(self, config: IMAPConfig):
+        self.config = config
+        self._conn: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
+
+    def connect(self):
+        if self.config.ssl:
+            self._conn = imaplib.IMAP4_SSL(self.config.host, self.config.port)
+        else:
+            self._conn = imaplib.IMAP4(self.config.host, self.config.port)
+        try:
+            self._conn.login(self.config.user, self.config.password)
+        except imaplib.IMAP4.error:
+            # Fallback to AUTHENTICATE PLAIN for non-ASCII passwords
+            import base64
+            auth_string = f"\x00{self.config.user}\x00{self.config.password}"
+            self._conn.authenticate("PLAIN", lambda _: auth_string.encode("utf-8"))
+        logger.info(f"Connected to {self.config.host} as {self.config.user}")
+
+    def disconnect(self):
+        if self._conn:
+            try:
+                self._conn.logout()
+            except Exception:
+                pass
+            self._conn = None
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *args):
+        self.disconnect()
+
+    def list_folders(self) -> list[dict]:
+        """List all IMAP folders with their separator."""
+        import re
+        status, data = self._conn.list()
+        folders = []
+        for item in data:
+            if isinstance(item, bytes):
+                # IMAP LIST format: (\\flags) "sep" "folder_name"
+                match = re.match(rb'\(([^)]*)\)\s+"(.+?)"\s+(.*)', item)
+                if match:
+                    flags = match.group(1).decode()
+                    sep = match.group(2).decode()
+                    raw_name = match.group(3).decode().strip('"')
+                    folders.append({
+                        "name": raw_name,
+                        "display_name": _decode_imap_utf7(raw_name),
+                        "separator": sep,
+                        "flags": flags,
+                    })
+        return folders
+
+    def get_uids(self, folder: str = "INBOX", since_uid: str | None = None) -> list[str]:
+        """Get message UIDs in a folder, optionally since a given UID."""
+        self._conn.select(_imap_quote(folder), readonly=True)
+        if since_uid:
+            criteria = f"UID {int(since_uid) + 1}:*"
+            status, data = self._conn.uid("SEARCH", None, criteria)
+        else:
+            status, data = self._conn.uid("SEARCH", None, "ALL")
+
+        if status != "OK":
+            return []
+        uids = data[0].decode().split() if data[0] else []
+        # Filter out UIDs <= since_uid (IMAP search can return the boundary)
+        if since_uid:
+            uids = [u for u in uids if int(u) > int(since_uid)]
+        return uids
+
+    def fetch_email(self, uid: str, folder: str = "INBOX") -> EmailContext | None:
+        """Fetch and parse a single email by UID."""
+        self._conn.select(_imap_quote(folder), readonly=True)
+        status, data = self._conn.uid("FETCH", uid, "(RFC822)")
+        if status != "OK" or not data or data[0] is None:
+            return None
+
+        raw = data[0][1]
+        msg = email.message_from_bytes(raw)
+
+        body_text = ""
+        has_attachments = False
+        attachment_names = []
+
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            disposition = str(part.get("Content-Disposition", ""))
+
+            if "attachment" in disposition:
+                has_attachments = True
+                filename = part.get_filename() or "unnamed"
+                attachment_names.append(filename)
+            elif content_type == "text/plain" and not body_text:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    try:
+                        body_text = payload.decode(charset, errors="replace")
+                    except (UnicodeDecodeError, LookupError):
+                        body_text = payload.decode("utf-8", errors="replace")
+
+        date_str = msg.get("Date", "")
+        try:
+            date_tuple = email.utils.parsedate_to_datetime(date_str)
+            date_formatted = date_tuple.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            date_formatted = date_str
+
+        from_addr = email.utils.parseaddr(msg.get("From", ""))[1]
+        to_addr = email.utils.parseaddr(msg.get("To", ""))[1]
+
+        return EmailContext(
+            uid=uid,
+            folder=folder,
+            from_addr=from_addr,
+            to_addr=to_addr,
+            subject=msg.get("Subject", ""),
+            body_text=body_text,
+            has_attachments=has_attachments,
+            attachment_names=attachment_names,
+            date=date_formatted,
+        )
+
+    def fetch_raw(self, uid: str, folder: str = "INBOX") -> bytes | None:
+        """Fetch raw email bytes (for attachment extraction)."""
+        self._conn.select(_imap_quote(folder), readonly=True)
+        status, data = self._conn.uid("FETCH", uid, "(RFC822)")
+        if status != "OK" or not data or data[0] is None:
+            return None
+        return data[0][1]
+
+    # --- Write operations (modify mail server state) ---
+
+    def create_folder(self, folder: str) -> bool:
+        """Create a new IMAP folder and subscribe to it."""
+        status, _ = self._conn.create(_imap_quote(folder))
+        if status == "OK":
+            self._conn.subscribe(_imap_quote(folder))
+            logger.info(f"Created and subscribed folder: {folder}")
+            return True
+        logger.error(f"Failed to create folder: {folder}")
+        return False
+
+    def delete_folder(self, folder: str) -> bool:
+        """Delete an IMAP folder (must be empty or server empties it)."""
+        # Unsubscribe first
+        self._conn.unsubscribe(_imap_quote(folder))
+        status, _ = self._conn.delete(_imap_quote(folder))
+        if status == "OK":
+            logger.info(f"Deleted folder: {folder}")
+            return True
+        logger.error(f"Failed to delete folder: {folder}")
+        return False
+
+    def move_email(self, uid: str, from_folder: str, to_folder: str) -> bool:
+        """Move an email to another folder via IMAP. Creates folder if needed."""
+        self._conn.select(_imap_quote(from_folder))
+        # Ensure target folder exists
+        self._conn.create(_imap_quote(to_folder))
+        # Copy then delete (MOVE not supported everywhere)
+        status, _ = self._conn.uid("COPY", uid, _imap_quote(to_folder))
+        if status == "OK":
+            self._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+            self._conn.expunge()
+            logger.info(f"Moved UID {uid}: {from_folder} -> {to_folder}")
+            return True
+        logger.error(f"Failed to move UID {uid} to {to_folder}")
+        return False
+
+    def flag_email(self, uid: str, folder: str, flag: str) -> bool:
+        """Add a flag to an email."""
+        self._conn.select(_imap_quote(folder))
+        imap_flag = _resolve_flag(flag)
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", imap_flag)
+        if status == "OK":
+            logger.info(f"Flagged UID {uid} with {imap_flag}")
+            return True
+        return False
+
+    def unflag_email(self, uid: str, folder: str, flag: str) -> bool:
+        """Remove a flag from an email."""
+        self._conn.select(_imap_quote(folder))
+        imap_flag = _resolve_flag(flag)
+        status, _ = self._conn.uid("STORE", uid, "-FLAGS", imap_flag)
+        if status == "OK":
+            logger.info(f"Unflagged UID {uid}: removed {imap_flag}")
+            return True
+        return False
+
+    def mark_read(self, uid: str, folder: str) -> bool:
+        """Mark an email as read."""
+        self._conn.select(_imap_quote(folder))
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "\\Seen")
+        return status == "OK"
+
+    def mark_unread(self, uid: str, folder: str) -> bool:
+        """Mark an email as unread."""
+        self._conn.select(_imap_quote(folder))
+        status, _ = self._conn.uid("STORE", uid, "-FLAGS", "\\Seen")
+        return status == "OK"
+
+    def mark_processed(self, uid: str, folder: str) -> bool:
+        """Add the MailIA processed flag."""
+        self._conn.select(_imap_quote(folder))
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", PROCESSED_FLAG)
+        return status == "OK"
+
+    def get_unprocessed_uids(self, folder: str = "INBOX") -> list[str]:
+        """Get UIDs of emails not yet processed by MailIA."""
+        self._conn.select(_imap_quote(folder), readonly=True)
+        # Search for emails WITHOUT our custom flag
+        status, data = self._conn.uid("SEARCH", None, f"UNKEYWORD {PROCESSED_FLAG}")
+        if status != "OK":
+            return []
+        return data[0].decode().split() if data[0] else []
+
+    def delete_email(self, uid: str, folder: str) -> bool:
+        """Delete an email (move to Trash, or flag as Deleted)."""
+        trash_names = [
+            "Trash", "INBOX.Trash", "Deleted", "INBOX.Deleted",
+            "Deleted Items", "INBOX.Deleted Items",
+            "Corbeille", "INBOX.Corbeille",
+        ]
+        try:
+            folders = self.list_folders()
+            folder_names = [f["name"] for f in folders]
+            trash_folder = None
+            for t in trash_names:
+                if t in folder_names:
+                    trash_folder = t
+                    break
+            if trash_folder and folder != trash_folder:
+                return self.move_email(uid, folder, trash_folder)
+        except Exception:
+            pass
+        # Fallback: flag as Deleted
+        self._conn.select(_imap_quote(folder))
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+        if status == "OK":
+            self._conn.expunge()
+            return True
+        return False
+
+    def save_draft(self, raw_message: bytes) -> bool:
+        """Save a message to the Drafts folder."""
+        draft_names = [
+            "Drafts", "INBOX.Drafts", "Draft", "INBOX.Draft",
+            "Brouillons", "INBOX.Brouillons",
+        ]
+        try:
+            folders = self.list_folders()
+            folder_names = [f["name"] for f in folders]
+            draft_folder = None
+            for d in draft_names:
+                if d in folder_names:
+                    draft_folder = d
+                    break
+            if not draft_folder:
+                draft_folder = "Drafts"
+                self._conn.create(_imap_quote(draft_folder))
+        except Exception:
+            draft_folder = "Drafts"
+
+        import time
+        status, _ = self._conn.append(
+            _imap_quote(draft_folder),
+            "\\Draft",
+            imaplib.Time2Internaldate(time.time()),
+            raw_message,
+        )
+        return status == "OK"
+
+    def save_to_sent(self, raw_message: bytes) -> bool:
+        """Save a sent message to the Sent folder."""
+        sent_names = [
+            "Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items",
+            "Sent Messages", "INBOX.Sent Messages",
+            "&BkQGRARJBkUGOw-", "INBOX.&BkQGRARJBkUGOw-",
+        ]
+        try:
+            folders = self.list_folders()
+            folder_names = [f["name"] for f in folders]
+            sent_folder = None
+            for s in sent_names:
+                if s in folder_names:
+                    sent_folder = s
+                    break
+            if not sent_folder:
+                sent_folder = "Sent"
+                self._conn.create(_imap_quote(sent_folder))
+        except Exception:
+            sent_folder = "Sent"
+
+        import time
+        status, _ = self._conn.append(
+            _imap_quote(sent_folder),
+            "\\Seen",
+            imaplib.Time2Internaldate(time.time()),
+            raw_message,
+        )
+        return status == "OK"
+
+    def get_attachment_data(self, uid: str, folder: str, attachment_index: int) -> dict | None:
+        """Get attachment data by index from an email."""
+        raw = self.fetch_raw(uid, folder)
+        if not raw:
+            return None
+        msg = email.message_from_bytes(raw)
+        idx = 0
+        for part in msg.walk():
+            disposition = str(part.get("Content-Disposition", ""))
+            if "attachment" in disposition:
+                if idx == attachment_index:
+                    payload = part.get_payload(decode=True)
+                    filename = part.get_filename() or "unnamed"
+                    content_type = part.get_content_type()
+                    return {
+                        "filename": filename,
+                        "content_type": content_type,
+                        "data": payload,
+                    }
+                idx += 1
+        return None
+
+
+def _resolve_flag(flag: str) -> str:
+    """Convert human-readable flag names to IMAP flags."""
+    mapping = {
+        "important": "\\Flagged",
+        "flagged": "\\Flagged",
+        "read": "\\Seen",
+        "seen": "\\Seen",
+        "answered": "\\Answered",
+        "draft": "\\Draft",
+    }
+    return mapping.get(flag.lower(), flag)
+
+
+def _decode_imap_utf7(s: str) -> str:
+    """Decode IMAP modified UTF-7 folder names (RFC 3501 section 5.1.3).
+
+    IMAP uses '&' instead of '+' as shift character, and ',' instead of '/' in base64.
+    '&-' encodes a literal '&'.
+    """
+    result = []
+    i = 0
+    while i < len(s):
+        if s[i] == '&':
+            j = s.index('-', i + 1)
+            if j == i + 1:
+                # &- is a literal &
+                result.append('&')
+            else:
+                # Decode modified base64 section
+                import base64
+                encoded = s[i + 1:j]
+                # Replace , with / for standard base64
+                encoded = encoded.replace(',', '/')
+                # Pad to multiple of 4
+                encoded += '=' * (4 - len(encoded) % 4) if len(encoded) % 4 else ''
+                try:
+                    decoded_bytes = base64.b64decode(encoded)
+                    result.append(decoded_bytes.decode('utf-16-be'))
+                except Exception:
+                    result.append(s[i:j + 1])
+            i = j + 1
+        else:
+            result.append(s[i])
+            i += 1
+    return ''.join(result)

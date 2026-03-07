@@ -1,0 +1,19 @@
+RewriteEngine On
+
+# Proxy API requests to mailia backend
+RewriteRule ^api/(.*)$ http://host.docker.internal:8100/api/$1 [P,L,QSA]
+
+# Proxy static files to mailia backend
+RewriteRule ^static/(.*)$ http://host.docker.internal:8100/static/$1 [P,L,QSA]
+
+# Proxy WebSocket
+RewriteCond %{HTTP:Upgrade} websocket [NC]
+RewriteRule ^ws/(.*)$ ws://host.docker.internal:8100/ws/$1 [P,L]
+
+# Serve index.html for root and all non-file routes (SPA)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^.*$ src/web/static/index.html [L]
+
+# Default index
+DirectoryIndex src/web/static/index.html
