@@ -154,6 +154,7 @@
             <input type="email" id="login-email" placeholder="Email">
             <input type="password" id="login-password" placeholder="Mot de passe">
             <button onclick="login()">Se connecter</button>
+            <p class="auth-toggle" onclick="showForgotPassword()">Mot de passe oublie ?</p>
             <p class="auth-toggle" onclick="toggleAuth()">Pas encore de compte ? S'inscrire</p>
         </div>
         <div id="register-form" class="hidden">
@@ -162,6 +163,21 @@
             <input type="password" id="reg-password" placeholder="Mot de passe">
             <button onclick="register()">Creer un compte</button>
             <p class="auth-toggle" onclick="toggleAuth()">Deja un compte ? Se connecter</p>
+        </div>
+        <div id="forgot-form" class="hidden">
+            <p style="text-align:center;color:#94a3b8;margin-bottom:1rem">Entrez votre email pour recevoir un lien de reinitialisation.</p>
+            <input type="email" id="forgot-email" placeholder="Email">
+            <button onclick="forgotPassword()">Envoyer le lien</button>
+            <p id="forgot-msg" style="text-align:center;margin-top:0.5rem"></p>
+            <p class="auth-toggle" onclick="showLoginForm()">Retour a la connexion</p>
+        </div>
+        <div id="reset-form" class="hidden">
+            <p style="text-align:center;color:#94a3b8;margin-bottom:1rem">Choisissez votre nouveau mot de passe.</p>
+            <input type="password" id="reset-password" placeholder="Nouveau mot de passe">
+            <input type="password" id="reset-password-confirm" placeholder="Confirmer le mot de passe">
+            <button onclick="resetPassword()">Reinitialiser</button>
+            <p id="reset-msg" style="text-align:center;margin-top:0.5rem"></p>
+            <p class="auth-toggle" onclick="showLoginForm()">Retour a la connexion</p>
         </div>
         <p id="auth-error" style="color:#f87171;text-align:center;margin-top:0.5rem"></p>
     </div>
@@ -509,7 +525,14 @@ function setCookie(k, v, days) { const d = new Date(); d.setTime(d.getTime() + (
 function getCookie(k) { const m = document.cookie.match('(^|;)\\s*' + k + '=([^;]*)'); return m ? decodeURIComponent(m[2]) : ''; }
 function delCookie(k) { document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/'; }
 
-if (token) initApp();
+// Check for password reset token in URL
+const _urlParams = new URLSearchParams(window.location.search);
+if (_urlParams.get('reset_token')) {
+    document.getElementById('login-form').classList.add('hidden');
+    document.getElementById('reset-form').classList.remove('hidden');
+} else if (token) {
+    initApp();
+}
 
 function api(path, opts = {}) {
     const headers = { 'Content-Type': 'application/json', ...opts.headers };
@@ -531,6 +554,74 @@ function apiRaw(path, opts = {}) {
 function toggleAuth() {
     document.getElementById('login-form').classList.toggle('hidden');
     document.getElementById('register-form').classList.toggle('hidden');
+    document.getElementById('forgot-form').classList.add('hidden');
+    document.getElementById('reset-form').classList.add('hidden');
+    document.getElementById('auth-error').textContent = '';
+}
+
+function showForgotPassword() {
+    document.getElementById('login-form').classList.add('hidden');
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('reset-form').classList.add('hidden');
+    document.getElementById('forgot-form').classList.remove('hidden');
+    document.getElementById('auth-error').textContent = '';
+    document.getElementById('forgot-msg').textContent = '';
+}
+
+function showLoginForm() {
+    document.getElementById('login-form').classList.remove('hidden');
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('forgot-form').classList.add('hidden');
+    document.getElementById('reset-form').classList.add('hidden');
+    document.getElementById('auth-error').textContent = '';
+}
+
+function showResetForm() {
+    document.getElementById('login-form').classList.add('hidden');
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('forgot-form').classList.add('hidden');
+    document.getElementById('reset-form').classList.remove('hidden');
+    document.getElementById('reset-msg').textContent = '';
+}
+
+async function forgotPassword() {
+    const msgEl = document.getElementById('forgot-msg');
+    const email = document.getElementById('forgot-email').value;
+    if (!email) { msgEl.style.color = '#f87171'; msgEl.textContent = 'Entrez votre email.'; return; }
+    try {
+        await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+        msgEl.style.color = '#34d399';
+        msgEl.textContent = 'Si un compte existe avec cet email, un lien de reinitialisation a ete envoye.';
+    } catch(e) {
+        msgEl.style.color = '#f87171';
+        msgEl.textContent = e.message || 'Erreur lors de l\'envoi.';
+    }
+}
+
+async function resetPassword() {
+    const msgEl = document.getElementById('reset-msg');
+    const pw = document.getElementById('reset-password').value;
+    const pw2 = document.getElementById('reset-password-confirm').value;
+    if (!pw || pw.length < 6) { msgEl.style.color = '#f87171'; msgEl.textContent = 'Le mot de passe doit contenir au moins 6 caracteres.'; return; }
+    if (pw !== pw2) { msgEl.style.color = '#f87171'; msgEl.textContent = 'Les mots de passe ne correspondent pas.'; return; }
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get('reset_token');
+    if (!resetToken) { msgEl.style.color = '#f87171'; msgEl.textContent = 'Lien de reinitialisation invalide.'; return; }
+    try {
+        const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: resetToken, new_password: pw }) });
+        if (data.access_token) {
+            token = data.access_token;
+            localStorage.setItem('mailia_token', token);
+            window.history.replaceState({}, '', window.location.pathname);
+            initApp();
+        } else {
+            msgEl.style.color = '#34d399';
+            msgEl.textContent = 'Mot de passe reinitialise. Vous pouvez vous connecter.';
+        }
+    } catch(e) {
+        msgEl.style.color = '#f87171';
+        msgEl.textContent = e.message || 'Lien invalide ou expire.';
+    }
 }
 
 async function login() {
