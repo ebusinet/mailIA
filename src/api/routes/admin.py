@@ -227,6 +227,7 @@ async def system_status(
 
         imap_counts = {}
         imap_total = 0
+        folder_display_map = {}
         try:
             from src.imap.manager import IMAPManager, IMAPConfig, _imap_quote
             from src.security import decrypt_value as _decrypt
@@ -238,8 +239,11 @@ async def system_status(
             imap.connect()
             try:
                 folder_entries = imap.list_folders()
+                folder_display_map = {}
                 for entry in folder_entries:
                     fname = entry["name"] if isinstance(entry, dict) else entry
+                    if isinstance(entry, dict) and "display_name" in entry:
+                        folder_display_map[fname] = entry["display_name"]
                     try:
                         status, data = imap._conn.status(_imap_quote(fname), "(MESSAGES)")
                         if status == "OK" and data and data[0]:
@@ -263,7 +267,8 @@ async def system_status(
         folder_details = []
         for f in all_folders:
             folder_details.append({
-                "folder": f,
+                "folder": folder_display_map.get(f, f),
+                "folder_path": f,
                 "imap_messages": imap_counts.get(f),
                 "es_indexed": es_counts.get(f, 0),
                 "last_uid": sync_state.get(f),
@@ -290,12 +295,13 @@ async def system_status(
         .limit(50)
     )
     logs = log_result.scalars().all()
+    from src.imap.manager import _decode_imap_utf7
     recent_logs = [{
         "id": log.id,
         "user_id": log.user_id,
         "account_id": log.mail_account_id,
         "mail_uid": log.mail_uid,
-        "folder": log.folder,
+        "folder": _decode_imap_utf7(log.folder) if log.folder else log.folder,
         "action": log.action_taken,
         "detail": log.action_detail,
         "ai_response": log.ai_response[:200] if log.ai_response else None,

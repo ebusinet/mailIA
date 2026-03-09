@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from elasticsearch import AsyncElasticsearch
 
 from src.config import get_settings
-from src.db.models import User, MailAccount, AIProvider, AIRule, ProcessingLog
+from src.db.models import User, MailAccount, AIProvider, AIRule, ProcessingLog, LocalFolder, LocalEmail
 from src.imap.manager import IMAPManager, IMAPConfig
 from src.security import decrypt_value
 

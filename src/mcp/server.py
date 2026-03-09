@@ -1120,6 +1120,592 @@ async def get_processing_logs(
 
 
 # ---------------------------------------------------------------------------
+# LOCAL STORAGE (PostgreSQL — non-IMAP emails)
+# ---------------------------------------------------------------------------
+
+@mcp.tool(tags={"local"})
+async def list_local_folders(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """List all local (non-IMAP) folders for a mail account, as a flat list with hierarchy info."""
+    from sqlalchemy import select
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+        result = await db.execute(
+            select(LocalFolder).where(LocalFolder.account_id == account_id).order_by(LocalFolder.path)
+        )
+        folders = result.scalars().all()
+        return {
+            "account_id": account_id,
+            "folders": [
+                {"id": f.id, "name": f.name, "path": f.path, "parent_path": f.parent_path}
+                for f in folders
+            ],
+        }
+
+
+@mcp.tool(tags={"local"})
+async def list_local_emails(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder_path: Annotated[str, Field(description="Local folder path (e.g. 'Perso/maison')")],
+    limit: Annotated[int, Field(description="Max emails to list", ge=1, le=200)] = 50,
+    offset: Annotated[int, Field(description="Offset for pagination", ge=0)] = 0,
+) -> dict:
+    """List emails in a local folder with subject, sender, date. Paginated."""
+    from sqlalchemy import select, func
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+        folder = (await db.execute(
+            select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == folder_path)
+        )).scalar_one_or_none()
+        if not folder:
+            raise ToolError(f"Local folder '{folder_path}' not found")
+
+        total = (await db.execute(
+            select(func.count()).select_from(LocalEmail).where(LocalEmail.folder_id == folder.id)
+        )).scalar()
+
+        result = await db.execute(
+            select(LocalEmail).where(LocalEmail.folder_id == folder.id)
+            .order_by(LocalEmail.date.desc().nullslast())
+            .offset(offset).limit(limit)
+        )
+        emails = result.scalars().all()
+        return {
+            "folder": folder_path, "total": total,
+            "emails": [
+                {
+                    "id": e.id, "message_id": e.message_id_header,
+                    "from": e.from_addr, "to": e.to_addr, "subject": e.subject,
+                    "date": e.date.isoformat() if e.date else None,
+                    "has_attachments": e.has_attachments,
+                    "seen": e.seen, "flagged": e.flagged,
+                }
+                for e in emails
+            ],
+        }
+
+
+@mcp.tool(tags={"local"})
+async def read_local_email(
+    email_id: Annotated[int, Field(description="Local email ID")],
+) -> dict:
+    """Read the full content of a local email: headers, body text/html."""
+    from sqlalchemy import select
+    from src.mcp.context import get_db
+    from src.db.models import LocalEmail, LocalFolder, MailAccount
+
+    user_id = _user_id()
+    async with get_db() as db:
+        email = (await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))).scalar_one_or_none()
+        if not email:
+            raise ToolError(f"Local email {email_id} not found")
+        folder = (await db.execute(select(LocalFolder).where(LocalFolder.id == email.folder_id))).scalar_one_or_none()
+        if not folder:
+            raise ToolError("Folder not found")
+        account = (await db.execute(
+            select(MailAccount).where(MailAccount.id == folder.account_id, MailAccount.user_id == user_id)
+        )).scalar_one_or_none()
+        if not account:
+            raise ToolError("Access denied")
+
+        return {
+            "id": email.id, "folder": folder.path,
+            "message_id": email.message_id_header,
+            "from": email.from_addr, "to": email.to_addr, "cc": email.cc_addr,
+            "subject": email.subject,
+            "date": email.date.isoformat() if email.date else None,
+            "body_text": (email.body_text or "")[:10000],
+            "body_html": (email.body_html or "")[:10000],
+            "has_attachments": email.has_attachments,
+            "seen": email.seen, "flagged": email.flagged, "answered": email.answered,
+        }
+
+
+@mcp.tool(tags={"local"})
+async def local_folder_stats(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """Get email count per local folder for an account."""
+    from sqlalchemy import select, func
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+        result = await db.execute(
+            select(LocalFolder.path, func.count(LocalEmail.id))
+            .outerjoin(LocalEmail, LocalEmail.folder_id == LocalFolder.id)
+            .where(LocalFolder.account_id == account_id)
+            .group_by(LocalFolder.path)
+            .order_by(LocalFolder.path)
+        )
+        rows = result.all()
+        total = sum(r[1] for r in rows)
+        return {
+            "account_id": account_id, "total_emails": total,
+            "folders": [{"path": r[0], "count": r[1]} for r in rows],
+        }
+
+
+@mcp.tool(tags={"local"})
+async def create_local_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    path: Annotated[str, Field(description="Folder path (e.g. 'Archives/2024')")],
+) -> dict:
+    """Create a local folder (and any missing parent folders)."""
+    from sqlalchemy import select
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+
+        existing = (await db.execute(
+            select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == path)
+        )).scalar_one_or_none()
+        if existing:
+            return {"status": "exists", "id": existing.id, "path": path}
+
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            ancestor_path = "/".join(parts[:i])
+            exists = (await db.execute(
+                select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == ancestor_path)
+            )).scalar_one_or_none()
+            if not exists:
+                ancestor = LocalFolder(
+                    account_id=account_id, name=parts[i-1], path=ancestor_path,
+                    parent_path="/".join(parts[:i-1]) if i > 1 else None,
+                )
+                db.add(ancestor)
+                await db.flush()
+
+        new_folder = LocalFolder(
+            account_id=account_id, name=parts[-1], path=path,
+            parent_path="/".join(parts[:-1]) if len(parts) > 1 else None,
+        )
+        db.add(new_folder)
+        await db.commit()
+        await db.refresh(new_folder)
+        return {"status": "created", "id": new_folder.id, "path": path}
+
+
+@mcp.tool(tags={"local"})
+async def delete_local_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    path: Annotated[str, Field(description="Folder path to delete")],
+    recursive: Annotated[bool, Field(description="Also delete subfolders")] = False,
+) -> dict:
+    """Delete a local folder and all its emails. Use recursive=True to also delete subfolders."""
+    from sqlalchemy import select, delete as sa_delete
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+
+        if recursive:
+            folders = (await db.execute(
+                select(LocalFolder).where(
+                    LocalFolder.account_id == account_id,
+                    (LocalFolder.path == path) | LocalFolder.path.startswith(path + "/"),
+                )
+            )).scalars().all()
+        else:
+            f = (await db.execute(
+                select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == path)
+            )).scalar_one_or_none()
+            folders = [f] if f else []
+
+        if not folders:
+            raise ToolError(f"Folder '{path}' not found")
+
+        total_deleted = 0
+        for folder in folders:
+            count = (await db.execute(
+                select(LocalEmail.id).where(LocalEmail.folder_id == folder.id)
+            )).all()
+            total_deleted += len(count)
+            await db.execute(sa_delete(LocalEmail).where(LocalEmail.folder_id == folder.id))
+            await db.delete(folder)
+        await db.commit()
+        return {"status": "deleted", "folders_deleted": len(folders), "emails_deleted": total_deleted}
+
+
+@mcp.tool(tags={"local", "action"})
+async def move_local_email(
+    email_id: Annotated[int, Field(description="Local email ID")],
+    target_folder_path: Annotated[str, Field(description="Target local folder path")],
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """Move a local email to another local folder."""
+    from sqlalchemy import select
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail, MailAccount
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+        email = (await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))).scalar_one_or_none()
+        if not email:
+            raise ToolError(f"Email {email_id} not found")
+
+        target = (await db.execute(
+            select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == target_folder_path)
+        )).scalar_one_or_none()
+        if not target:
+            raise ToolError(f"Target folder '{target_folder_path}' not found")
+
+        old_folder_id = email.folder_id
+        email.folder_id = target.id
+        await db.commit()
+        return {"status": "moved", "email_id": email_id, "target": target_folder_path}
+
+
+# ---------------------------------------------------------------------------
+# DEDUP / CROSS-STORAGE TOOLS
+# ---------------------------------------------------------------------------
+
+@mcp.tool(tags={"local", "action"})
+async def find_duplicates_local_vs_imap(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    dry_run: Annotated[bool, Field(description="If True, only count duplicates without deleting")] = True,
+) -> dict:
+    """Find (and optionally delete) local emails that also exist on IMAP.
+    Compares by Message-ID header across all IMAP folders.
+
+    Use dry_run=True first to see how many duplicates exist.
+    Set dry_run=False to actually delete the local duplicates.
+    """
+    from sqlalchemy import select, func, delete as sa_delete
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+        # Step 1: Collect all Message-IDs from IMAP
+        imap = get_imap(account)
+        imap.connect()
+        imap_msgids = set()
+        folder_scan = {}
+        try:
+            folders = imap.list_folders()
+            for f in folders:
+                fname = f["name"]
+                try:
+                    imap._conn.select(f'"{fname}"')
+                    status, data = imap._conn.search(None, "ALL")
+                    if status != "OK" or not data[0]:
+                        folder_scan[fname] = 0
+                        continue
+                    uids = data[0].split()
+                    folder_count = 0
+                    batch_size = 500
+                    for i in range(0, len(uids), batch_size):
+                        batch = uids[i:i + batch_size]
+                        uid_range = b",".join(batch)
+                        st, hdr_data = imap._conn.fetch(
+                            uid_range.decode(), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+                        )
+                        if st == "OK":
+                            for item in hdr_data:
+                                if isinstance(item, tuple) and len(item) > 1:
+                                    hdr = item[1].decode("utf-8", errors="replace")
+                                    for line in hdr.splitlines():
+                                        if line.lower().startswith("message-id:"):
+                                            mid = line.split(":", 1)[1].strip()
+                                            if mid:
+                                                imap_msgids.add(mid)
+                                                folder_count += 1
+                    folder_scan[fname] = folder_count
+                except Exception as e:
+                    logger.warning(f"Dedup: error scanning IMAP folder {fname}: {e}")
+                    folder_scan[fname] = -1
+        finally:
+            imap.disconnect()
+
+        # Step 2: Find local emails whose Message-ID is in the IMAP set
+        local_emails = (await db.execute(
+            select(LocalEmail.id, LocalEmail.message_id_header, LocalEmail.folder_id)
+            .where(
+                LocalEmail.folder_id.in_(
+                    select(LocalFolder.id).where(LocalFolder.account_id == account_id)
+                ),
+                LocalEmail.message_id_header.isnot(None),
+                LocalEmail.message_id_header != "",
+            )
+        )).all()
+
+        duplicates = []
+        unique_local = 0
+        for eid, mid, fid in local_emails:
+            if mid in imap_msgids:
+                duplicates.append(eid)
+            else:
+                unique_local += 1
+
+        # Step 3: Optionally delete
+        deleted = 0
+        if not dry_run and duplicates:
+            batch_size = 500
+            for i in range(0, len(duplicates), batch_size):
+                batch = duplicates[i:i + batch_size]
+                await db.execute(sa_delete(LocalEmail).where(LocalEmail.id.in_(batch)))
+            await db.commit()
+            deleted = len(duplicates)
+
+        return {
+            "imap_folders_scanned": len(folder_scan),
+            "imap_unique_message_ids": len(imap_msgids),
+            "local_total": len(local_emails),
+            "duplicates_found": len(duplicates),
+            "unique_local_only": unique_local,
+            "deleted": deleted,
+            "dry_run": dry_run,
+        }
+
+
+@mcp.tool(tags={"local", "action"})
+async def find_duplicates_imap_vs_local(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """Find IMAP emails that also exist in local storage (by Message-ID).
+    Returns per-folder counts. Does NOT delete — use delete_email or move_email to act."""
+    from sqlalchemy import select
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+        # Collect all local Message-IDs
+        local_msgids = set()
+        result = await db.execute(
+            select(LocalEmail.message_id_header).where(
+                LocalEmail.folder_id.in_(
+                    select(LocalFolder.id).where(LocalFolder.account_id == account_id)
+                ),
+                LocalEmail.message_id_header.isnot(None),
+                LocalEmail.message_id_header != "",
+            )
+        )
+        for row in result.all():
+            local_msgids.add(row[0])
+
+    # Scan IMAP
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        folders = imap.list_folders()
+        per_folder = {}
+        total_imap = 0
+        total_dups = 0
+        for f in folders:
+            fname = f["name"]
+            try:
+                imap._conn.select(f'"{fname}"')
+                status, data = imap._conn.search(None, "ALL")
+                if status != "OK" or not data[0]:
+                    continue
+                uids = data[0].split()
+                folder_total = len(uids)
+                folder_dups = 0
+                batch_size = 500
+                for i in range(0, len(uids), batch_size):
+                    batch = uids[i:i + batch_size]
+                    uid_range = b",".join(batch)
+                    st, hdr_data = imap._conn.fetch(
+                        uid_range.decode(), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+                    )
+                    if st == "OK":
+                        for item in hdr_data:
+                            if isinstance(item, tuple) and len(item) > 1:
+                                hdr = item[1].decode("utf-8", errors="replace")
+                                for line in hdr.splitlines():
+                                    if line.lower().startswith("message-id:"):
+                                        mid = line.split(":", 1)[1].strip()
+                                        if mid and mid in local_msgids:
+                                            folder_dups += 1
+                total_imap += folder_total
+                total_dups += folder_dups
+                if folder_dups > 0:
+                    per_folder[fname] = {"total": folder_total, "duplicates": folder_dups}
+            except Exception as e:
+                logger.warning(f"Dedup scan error for {fname}: {e}")
+        return {
+            "local_unique_message_ids": len(local_msgids),
+            "imap_total_emails": total_imap,
+            "imap_duplicates_with_local": total_dups,
+            "per_folder": per_folder,
+        }
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"local", "action"})
+async def copy_local_to_imap(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    local_folder_path: Annotated[str, Field(description="Source local folder path")],
+    imap_folder: Annotated[str, Field(description="Target IMAP folder")],
+    delete_after: Annotated[bool, Field(description="Delete local copy after successful IMAP upload")] = False,
+) -> dict:
+    """Copy emails from a local folder to an IMAP folder.
+    Skips emails already on IMAP (by Message-ID). Optionally deletes local copies."""
+    import imaplib
+    import email.utils
+    import time
+    from sqlalchemy import select, delete as sa_delete
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+        folder = (await db.execute(
+            select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == local_folder_path)
+        )).scalar_one_or_none()
+        if not folder:
+            raise ToolError(f"Local folder '{local_folder_path}' not found")
+
+        emails = (await db.execute(
+            select(LocalEmail).where(LocalEmail.folder_id == folder.id)
+        )).scalars().all()
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _encode_imap_utf7
+        encoded = _encode_imap_utf7(imap_folder)
+        try:
+            imap._conn.select(f'"{encoded}"')
+        except Exception:
+            imap._conn.create(f'"{encoded}"')
+            imap._conn.subscribe(f'"{encoded}"')
+            imap._conn.select(f'"{encoded}"')
+
+        # Fetch existing IMAP message-ids for dedup
+        existing = set()
+        st, data = imap._conn.search(None, "ALL")
+        if st == "OK" and data[0]:
+            uids = data[0].split()
+            for i in range(0, len(uids), 500):
+                batch = uids[i:i+500]
+                st2, hdata = imap._conn.fetch(b",".join(batch).decode(), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+                if st2 == "OK":
+                    for item in hdata:
+                        if isinstance(item, tuple) and len(item) > 1:
+                            for line in item[1].decode("utf-8", errors="replace").splitlines():
+                                if line.lower().startswith("message-id:"):
+                                    existing.add(line.split(":", 1)[1].strip())
+
+        uploaded = skipped = errors = 0
+        uploaded_ids = []
+        for em in emails:
+            mid = em.message_id_header or ""
+            if mid and mid in existing:
+                skipped += 1
+                continue
+            if not em.raw_message:
+                skipped += 1
+                continue
+            try:
+                imap_date = imaplib.Time2Internaldate(time.time())
+                if em.date:
+                    imap_date = imaplib.Time2Internaldate(em.date.timestamp())
+                flags = "\\Seen" if em.seen else ""
+                st, _ = imap._conn.append(f'"{encoded}"', flags, imap_date, em.raw_message)
+                if st == "OK":
+                    uploaded += 1
+                    uploaded_ids.append(em.id)
+                else:
+                    errors += 1
+            except Exception:
+                errors += 1
+    finally:
+        imap.disconnect()
+
+    if delete_after and uploaded_ids:
+        async with get_db() as db:
+            await db.execute(sa_delete(LocalEmail).where(LocalEmail.id.in_(uploaded_ids)))
+            await db.commit()
+
+    return {
+        "uploaded": uploaded, "skipped": skipped, "errors": errors,
+        "deleted_local": len(uploaded_ids) if delete_after else 0,
+    }
+
+
+@mcp.tool(tags={"local", "action"})
+async def purge_empty_local_folders(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """Delete all local folders that contain zero emails (cleanup after dedup)."""
+    from sqlalchemy import select, func, delete as sa_delete
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.db.models import LocalFolder, LocalEmail
+
+    user_id = _user_id()
+    async with get_db() as db:
+        await get_account(db, user_id, account_id)
+
+        # Find folders with 0 emails
+        result = await db.execute(
+            select(LocalFolder.id, LocalFolder.path, func.count(LocalEmail.id))
+            .outerjoin(LocalEmail, LocalEmail.folder_id == LocalFolder.id)
+            .where(LocalFolder.account_id == account_id)
+            .group_by(LocalFolder.id, LocalFolder.path)
+        )
+        all_folders = result.all()
+        empty = [r for r in all_folders if r[2] == 0]
+
+        # Only delete leaf-empty folders (no children with emails)
+        empty_paths = {r[1] for r in empty}
+        non_empty_paths = {r[1] for r in all_folders if r[2] > 0}
+
+        to_delete = []
+        for fid, fpath, _ in empty:
+            has_non_empty_child = any(p.startswith(fpath + "/") for p in non_empty_paths)
+            if not has_non_empty_child:
+                to_delete.append((fid, fpath))
+
+        if to_delete:
+            await db.execute(
+                sa_delete(LocalFolder).where(LocalFolder.id.in_([t[0] for t in to_delete]))
+            )
+            await db.commit()
+
+        return {
+            "deleted_folders": len(to_delete),
+            "deleted_paths": [t[1] for t in to_delete],
+        }
+
+
+# ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 

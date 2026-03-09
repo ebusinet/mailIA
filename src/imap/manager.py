@@ -375,6 +375,37 @@ def _resolve_flag(flag: str) -> str:
     return mapping.get(flag.lower(), flag)
 
 
+def _encode_imap_utf7(s: str) -> str:
+    """Encode a Unicode string to IMAP modified UTF-7 (RFC 3501 section 5.1.3).
+
+    ASCII printable chars (0x20-0x7e) pass through, except '&' becomes '&-'.
+    Non-ASCII chars are encoded as modified base64 between '&' and '-'.
+    """
+    import base64
+    result = []
+    non_ascii = []
+
+    def _flush_non_ascii():
+        if non_ascii:
+            utf16 = ''.join(non_ascii).encode('utf-16-be')
+            b64 = base64.b64encode(utf16).decode('ascii').rstrip('=')
+            b64 = b64.replace('/', ',')
+            result.append('&' + b64 + '-')
+            non_ascii.clear()
+
+    for ch in s:
+        if ch == '&':
+            _flush_non_ascii()
+            result.append('&-')
+        elif 0x20 <= ord(ch) <= 0x7e:
+            _flush_non_ascii()
+            result.append(ch)
+        else:
+            non_ascii.append(ch)
+    _flush_non_ascii()
+    return ''.join(result)
+
+
 def _decode_imap_utf7(s: str) -> str:
     """Decode IMAP modified UTF-7 folder names (RFC 3501 section 5.1.3).
 

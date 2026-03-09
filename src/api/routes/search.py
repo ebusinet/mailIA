@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from src.db.models import User
 from src.api.deps import get_current_user
 from src.search.indexer import get_es_client, search_emails, semantic_search
+from src.imap.manager import _decode_imap_utf7
 
 router = APIRouter()
 
@@ -58,7 +59,7 @@ async def search(
             src = hit["_source"]
             results.append(SearchResult(
                 uid=src["uid"],
-                folder=src.get("folder", ""),
+                folder=_decode_imap_utf7(src.get("folder", "")),
                 from_addr=src.get("from_addr", ""),
                 subject=src.get("subject", ""),
                 date=src.get("date", ""),

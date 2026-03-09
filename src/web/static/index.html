@@ -5,31 +5,552 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MailIA</title>
     <link rel="manifest" href="/static/manifest.json">
-    <script src="https://cdn.tiny.cloud/1/no-api-key/tinymce/7/tinymce.min.js" referrerpolicy="origin"></script>
+    <script src="/static/tinymce/tinymce.min.js"></script>
     <style>
+        :root { --email-bg: #ffffff; }
+
+        /* ---- Light theme ---- */
+        body.theme-light { background: #f1f5f9; color: #1e293b; }
+        body.theme-light .auth-card, body.theme-light header, body.theme-light .chat-container,
+        body.theme-light .result-card, body.theme-light .modal-panel, body.theme-light .popup-menu,
+        body.theme-light .input-field, body.theme-light .settings-panel { background: #fff; }
+        body.theme-light .auth-card input, body.theme-light .chat-input input,
+        body.theme-light .chat-msg.assistant, body.theme-light .rules-editor textarea,
+        body.theme-light .compose-field input, body.theme-light .compose-field select,
+        body.theme-light .compose-row input, body.theme-light .compose-row select,
+        body.theme-light .compose-options select, body.theme-light .compose-options-inline select, body.theme-light .email-toolbar,
+        body.theme-light .import-tree-item:hover, body.theme-light .mail-row:hover { background: #f8fafc; }
+        body.theme-light .folder-item:hover, body.theme-light .chat-msg.user,
+        body.theme-light .attachment-chip, body.theme-light .popup-item:hover { background: #e2e8f0; }
+        body.theme-light .auth-card input, body.theme-light .btn-sm, body.theme-light .tab,
+        body.theme-light .chat-input input, body.theme-light .rules-editor textarea,
+        body.theme-light .compose-field input, body.theme-light .compose-field select,
+        body.theme-light .compose-row input, body.theme-light .compose-row select,
+        body.theme-light .compose-options select, body.theme-light .compose-options-inline select, body.theme-light .folder-children,
+        body.theme-light .local-folders-header, body.theme-light .modal-header,
+        body.theme-light .modal-footer, body.theme-light .popup-menu, body.theme-light .popup-menu-title,
+        body.theme-light .result-card, body.theme-light .input-field, body.theme-light .mail-row,
+        body.theme-light .toolbar-sep { border-color: #cbd5e1; }
+        body.theme-light .auth-card h1, body.theme-light header h1, body.theme-light .auth-toggle:hover,
+        body.theme-light .result-from, body.theme-light .mail-from, body.theme-light .modal-header h2,
+        body.theme-light .reading-meta .from, body.theme-light .settings-section h3 { color: #0284c7; }
+        body.theme-light .result-card:hover { border-left-color: #0284c7; }
+        body.theme-light .mail-row.selected { border-left-color: #0284c7; }
+        body.theme-light .btn-sm:hover { border-color: #0284c7; color: #0284c7; }
+        body.theme-light .btn-primary, body.theme-light .chat-input button,
+        body.theme-light .auth-card button:not(.pw-toggle) { background: #0284c7; color: #fff; }
+        body.theme-light .auth-card button:not(.pw-toggle):hover,
+        body.theme-light .btn-primary:hover { background: #0369a1; }
+        body.theme-light .tab.active { background: #0284c7; color: #fff; border-color: #0284c7; }
+        body.theme-light .folder-item.active { background: #0284c7; color: #fff; }
+        body.theme-light .result-subject, body.theme-light .reading-meta .subject,
+        body.theme-light .folder-item:hover, body.theme-light .popup-item:hover,
+        body.theme-light .modal-close:hover, body.theme-light .modal-fullscreen-btn:hover,
+        body.theme-light .mail-row.unread .mail-from, body.theme-light .mail-row.unread .mail-subject { font-weight: 700; }
+        body.theme-light .auth-toggle, body.theme-light .user-info span, body.theme-light .btn-sm,
+        body.theme-light .tab, body.theme-light .result-count, body.theme-light .mail-subject,
+        body.theme-light .compose-field label, body.theme-light .compose-row label, body.theme-light .compose-options label, body.theme-light .compose-options-inline label,
+        body.theme-light .reading-meta .to, body.theme-light .popup-item,
+        body.theme-light .folder-item, body.theme-light .settings-row label { color: #475569; }
+        body.theme-light .folder-item[data-storage="local"]:hover { background: #ede9fe; }
+        body.theme-light .import-tree-item.selected { background: rgba(124,58,237,0.1); }
+        body.theme-light .settings-row select, body.theme-light .settings-row input[type="color"] { background: #f8fafc; color: #1e293b; border-color: #cbd5e1; }
+        body.theme-light .theme-btn { border-color: #cbd5e1; }
+        body.theme-light .theme-btn.active { border-color: #0284c7; }
+        /* Inline style overrides for light theme */
+        body.theme-light [style*="background:#1e293b"] { background: #fff !important; }
+        body.theme-light [style*="background:#0f172a"] { background: #f8fafc !important; }
+        body.theme-light [style*="background:#334155"] { background: #e2e8f0 !important; }
+        body.theme-light [style*="color:#94a3b8"] { color: #475569 !important; }
+        body.theme-light [style*="color:#e2e8f0"] { color: #1e293b !important; }
+        body.theme-light [style*="color:#38bdf8"] { color: #0284c7 !important; }
+        body.theme-light [style*="border:1px solid #334155"] { border-color: #cbd5e1 !important; }
+        body.theme-light [style*="border-bottom:1px solid #334155"] { border-bottom-color: #cbd5e1 !important; }
+        body.theme-light [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #e2e8f0 !important; }
+        body.theme-light [style*="border-top:1px solid #334155"] { border-top-color: #cbd5e1 !important; }
+        body.theme-light [style*="border-left:2px solid #38bdf8"] { border-left-color: #0284c7 !important; }
+        body.theme-light .theme-card.active { border-color: #0284c7; }
+        body.theme-light .theme-card span:last-child { color: #475569; }
+        body.theme-light .mail-header { border-bottom-color: #cbd5e1; }
+        body.theme-light .mail-header-col { color: #64748b; }
+        body.theme-light .mail-header-col:hover, body.theme-light .mail-header-col.sorted { color: #0284c7; }
+        body.theme-light .mail-filter-row { border-bottom-color: #cbd5e1; }
+        body.theme-light .mail-filter-row input { background: #fff; border-color: #cbd5e1; color: #1e293b; }
+        body.theme-light .mail-filter-row input:focus { border-color: #0284c7; }
+        body.theme-light .pager-btn { border-color: #cbd5e1; color: #475569; }
+        body.theme-light .pager-btn:hover { border-color: #0284c7; color: #0284c7; }
+        body.theme-light .pager-btn.active { background: #0284c7; color: #fff; border-color: #0284c7; }
+        body.theme-light .pane-resize-handle:hover, body.theme-light .pane-resize-handle.dragging { background: #e2e8f0; }
+        body.theme-light .pane-resize-handle::after { background: #cbd5e1; }
+        body.theme-light .pane-resize-handle:hover::after { background: #0284c7; }
+        body.theme-light #preview-pane { background: #f8fafc; box-shadow: inset 0 4px 8px rgba(0,0,0,0.06); }
+        body.theme-light .preview-header { border-bottom-color: #cbd5e1; }
+        body.theme-light #preview-subject { color: #1e293b !important; }
+        body.theme-light .bulk-bar { background: #e0f2fe; color: #0284c7; }
+        body.theme-light .bulk-bar button { border-color: #0284c7; color: #0284c7; }
+        body.theme-light .bulk-bar button:hover { background: #0284c7; color: #fff; }
+        body.theme-light .explorer-toolbar .toolbar-sep { background: #cbd5e1; }
+        body.theme-light .toolbar-icon.active-on { background: #0284c7; color: #fff !important; border-color: #0284c7; }
+
+        /* ---- Nord theme ---- */
+        body.theme-nord { background: #2e3440; color: #eceff4; }
+        body.theme-nord .auth-card, body.theme-nord header, body.theme-nord .chat-container,
+        body.theme-nord .result-card, body.theme-nord .modal-panel, body.theme-nord .popup-menu,
+        body.theme-nord .input-field, body.theme-nord .settings-panel { background: #3b4252; }
+        body.theme-nord .auth-card input, body.theme-nord .chat-input input,
+        body.theme-nord .chat-msg.assistant, body.theme-nord .rules-editor textarea,
+        body.theme-nord .compose-field input, body.theme-nord .compose-field select,
+        body.theme-nord .compose-row input, body.theme-nord .compose-row select,
+        body.theme-nord .compose-options select, body.theme-nord .compose-options-inline select, body.theme-nord .email-toolbar,
+        body.theme-nord .import-tree-item:hover, body.theme-nord .mail-row:hover { background: #2e3440; }
+        body.theme-nord .folder-item:hover, body.theme-nord .chat-msg.user,
+        body.theme-nord .attachment-chip, body.theme-nord .popup-item:hover { background: #434c5e; }
+        body.theme-nord .auth-card input, body.theme-nord .btn-sm, body.theme-nord .tab,
+        body.theme-nord .chat-input input, body.theme-nord .rules-editor textarea,
+        body.theme-nord .compose-field input, body.theme-nord .compose-field select,
+        body.theme-nord .compose-row input, body.theme-nord .compose-row select,
+        body.theme-nord .compose-options select, body.theme-nord .compose-options-inline select, body.theme-nord .folder-children,
+        body.theme-nord .local-folders-header, body.theme-nord .modal-header,
+        body.theme-nord .modal-footer, body.theme-nord .popup-menu, body.theme-nord .popup-menu-title,
+        body.theme-nord .result-card, body.theme-nord .input-field, body.theme-nord .mail-row,
+        body.theme-nord .toolbar-sep { border-color: #434c5e; }
+        body.theme-nord .auth-card h1, body.theme-nord header h1, body.theme-nord .auth-toggle:hover,
+        body.theme-nord .result-from, body.theme-nord .mail-from, body.theme-nord .modal-header h2,
+        body.theme-nord .reading-meta .from, body.theme-nord .settings-section h3 { color: #88c0d0; }
+        body.theme-nord .result-card:hover { border-left-color: #88c0d0; }
+        body.theme-nord .mail-row.selected { border-left-color: #88c0d0; }
+        body.theme-nord .btn-sm:hover { border-color: #88c0d0; color: #88c0d0; }
+        body.theme-nord .btn-primary, body.theme-nord .chat-input button,
+        body.theme-nord .auth-card button:not(.pw-toggle) { background: #88c0d0; color: #2e3440; }
+        body.theme-nord .auth-card button:not(.pw-toggle):hover,
+        body.theme-nord .btn-primary:hover { background: #81a1c1; }
+        body.theme-nord .tab.active { background: #88c0d0; color: #2e3440; border-color: #88c0d0; }
+        body.theme-nord .folder-item.active { background: #88c0d0; color: #2e3440; }
+        body.theme-nord .auth-toggle, body.theme-nord .user-info span, body.theme-nord .btn-sm,
+        body.theme-nord .tab, body.theme-nord .result-count, body.theme-nord .mail-subject,
+        body.theme-nord .compose-field label, body.theme-nord .compose-row label, body.theme-nord .compose-options label, body.theme-nord .compose-options-inline label,
+        body.theme-nord .reading-meta .to, body.theme-nord .popup-item,
+        body.theme-nord .folder-item, body.theme-nord .settings-row label { color: #d8dee9; }
+        body.theme-nord .folder-item[data-storage="local"]:hover { background: #4c3a6e; }
+        body.theme-nord .theme-card.active { border-color: #88c0d0; }
+        body.theme-nord .settings-row select, body.theme-nord .settings-row input[type="color"] { background: #2e3440; color: #eceff4; border-color: #434c5e; }
+        body.theme-nord [style*="background:#1e293b"] { background: #3b4252 !important; }
+        body.theme-nord [style*="background:#0f172a"] { background: #2e3440 !important; }
+        body.theme-nord [style*="background:#334155"] { background: #434c5e !important; }
+        body.theme-nord [style*="color:#94a3b8"] { color: #d8dee9 !important; }
+        body.theme-nord [style*="color:#e2e8f0"] { color: #eceff4 !important; }
+        body.theme-nord [style*="color:#38bdf8"] { color: #88c0d0 !important; }
+        body.theme-nord [style*="border:1px solid #334155"] { border-color: #434c5e !important; }
+        body.theme-nord [style*="border-bottom:1px solid #334155"] { border-bottom-color: #434c5e !important; }
+        body.theme-nord [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #3b4252 !important; }
+        body.theme-nord [style*="border-top:1px solid #334155"] { border-top-color: #434c5e !important; }
+        body.theme-nord [style*="border-left:2px solid #38bdf8"] { border-left-color: #88c0d0 !important; }
+
+        /* ---- Dracula theme ---- */
+        body.theme-dracula { background: #282a36; color: #f8f8f2; }
+        body.theme-dracula .auth-card, body.theme-dracula header, body.theme-dracula .chat-container,
+        body.theme-dracula .result-card, body.theme-dracula .modal-panel, body.theme-dracula .popup-menu,
+        body.theme-dracula .input-field, body.theme-dracula .settings-panel { background: #44475a; }
+        body.theme-dracula .auth-card input, body.theme-dracula .chat-input input,
+        body.theme-dracula .chat-msg.assistant, body.theme-dracula .rules-editor textarea,
+        body.theme-dracula .compose-field input, body.theme-dracula .compose-field select,
+        body.theme-dracula .compose-row input, body.theme-dracula .compose-row select,
+        body.theme-dracula .compose-options select, body.theme-dracula .compose-options-inline select, body.theme-dracula .email-toolbar,
+        body.theme-dracula .import-tree-item:hover, body.theme-dracula .mail-row:hover { background: #282a36; }
+        body.theme-dracula .folder-item:hover, body.theme-dracula .chat-msg.user,
+        body.theme-dracula .attachment-chip, body.theme-dracula .popup-item:hover { background: #6272a4; }
+        body.theme-dracula .auth-card input, body.theme-dracula .btn-sm, body.theme-dracula .tab,
+        body.theme-dracula .chat-input input, body.theme-dracula .rules-editor textarea,
+        body.theme-dracula .compose-field input, body.theme-dracula .compose-field select,
+        body.theme-dracula .compose-row input, body.theme-dracula .compose-row select,
+        body.theme-dracula .compose-options select, body.theme-dracula .compose-options-inline select, body.theme-dracula .folder-children,
+        body.theme-dracula .local-folders-header, body.theme-dracula .modal-header,
+        body.theme-dracula .modal-footer, body.theme-dracula .popup-menu, body.theme-dracula .popup-menu-title,
+        body.theme-dracula .result-card, body.theme-dracula .input-field, body.theme-dracula .mail-row,
+        body.theme-dracula .toolbar-sep { border-color: #6272a4; }
+        body.theme-dracula .auth-card h1, body.theme-dracula header h1, body.theme-dracula .auth-toggle:hover,
+        body.theme-dracula .result-from, body.theme-dracula .mail-from, body.theme-dracula .modal-header h2,
+        body.theme-dracula .reading-meta .from, body.theme-dracula .settings-section h3 { color: #bd93f9; }
+        body.theme-dracula .result-card:hover { border-left-color: #bd93f9; }
+        body.theme-dracula .mail-row.selected { border-left-color: #bd93f9; }
+        body.theme-dracula .btn-sm:hover { border-color: #bd93f9; color: #bd93f9; }
+        body.theme-dracula .btn-primary, body.theme-dracula .chat-input button,
+        body.theme-dracula .auth-card button:not(.pw-toggle) { background: #bd93f9; color: #282a36; }
+        body.theme-dracula .auth-card button:not(.pw-toggle):hover,
+        body.theme-dracula .btn-primary:hover { background: #ff79c6; }
+        body.theme-dracula .tab.active { background: #bd93f9; color: #282a36; border-color: #bd93f9; }
+        body.theme-dracula .folder-item.active { background: #bd93f9; color: #282a36; }
+        body.theme-dracula .result-highlight { color: #f1fa8c; }
+        body.theme-dracula .icon-flag { color: #ff5555; }
+        body.theme-dracula .auth-toggle, body.theme-dracula .user-info span, body.theme-dracula .btn-sm,
+        body.theme-dracula .tab, body.theme-dracula .result-count, body.theme-dracula .mail-subject,
+        body.theme-dracula .compose-field label, body.theme-dracula .compose-row label, body.theme-dracula .compose-options label, body.theme-dracula .compose-options-inline label,
+        body.theme-dracula .reading-meta .to, body.theme-dracula .popup-item,
+        body.theme-dracula .folder-item, body.theme-dracula .settings-row label { color: #c0c0d0; }
+        body.theme-dracula .folder-item[data-storage="local"]:hover { background: #503a7e; }
+        body.theme-dracula .theme-card.active { border-color: #bd93f9; }
+        body.theme-dracula .settings-row select, body.theme-dracula .settings-row input[type="color"] { background: #282a36; color: #f8f8f2; border-color: #6272a4; }
+        body.theme-dracula [style*="background:#1e293b"] { background: #44475a !important; }
+        body.theme-dracula [style*="background:#0f172a"] { background: #282a36 !important; }
+        body.theme-dracula [style*="background:#334155"] { background: #6272a4 !important; }
+        body.theme-dracula [style*="color:#94a3b8"] { color: #c0c0d0 !important; }
+        body.theme-dracula [style*="color:#e2e8f0"] { color: #f8f8f2 !important; }
+        body.theme-dracula [style*="color:#38bdf8"] { color: #bd93f9 !important; }
+        body.theme-dracula [style*="border:1px solid #334155"] { border-color: #6272a4 !important; }
+        body.theme-dracula [style*="border-bottom:1px solid #334155"] { border-bottom-color: #6272a4 !important; }
+        body.theme-dracula [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #44475a !important; }
+        body.theme-dracula [style*="border-top:1px solid #334155"] { border-top-color: #6272a4 !important; }
+        body.theme-dracula [style*="border-left:2px solid #38bdf8"] { border-left-color: #bd93f9 !important; }
+
+        /* ---- Ocean theme ---- */
+        body.theme-ocean { background: #0a192f; color: #ccd6f6; }
+        body.theme-ocean .auth-card, body.theme-ocean header, body.theme-ocean .chat-container,
+        body.theme-ocean .result-card, body.theme-ocean .modal-panel, body.theme-ocean .popup-menu,
+        body.theme-ocean .input-field, body.theme-ocean .settings-panel { background: #172a45; }
+        body.theme-ocean .auth-card input, body.theme-ocean .chat-input input,
+        body.theme-ocean .chat-msg.assistant, body.theme-ocean .rules-editor textarea,
+        body.theme-ocean .compose-field input, body.theme-ocean .compose-field select,
+        body.theme-ocean .compose-row input, body.theme-ocean .compose-row select,
+        body.theme-ocean .compose-options select, body.theme-ocean .compose-options-inline select, body.theme-ocean .email-toolbar,
+        body.theme-ocean .import-tree-item:hover, body.theme-ocean .mail-row:hover { background: #0a192f; }
+        body.theme-ocean .folder-item:hover, body.theme-ocean .chat-msg.user,
+        body.theme-ocean .attachment-chip, body.theme-ocean .popup-item:hover { background: #1d3557; }
+        body.theme-ocean .auth-card input, body.theme-ocean .btn-sm, body.theme-ocean .tab,
+        body.theme-ocean .chat-input input, body.theme-ocean .rules-editor textarea,
+        body.theme-ocean .compose-field input, body.theme-ocean .compose-field select,
+        body.theme-ocean .compose-row input, body.theme-ocean .compose-row select,
+        body.theme-ocean .compose-options select, body.theme-ocean .compose-options-inline select, body.theme-ocean .folder-children,
+        body.theme-ocean .local-folders-header, body.theme-ocean .modal-header,
+        body.theme-ocean .modal-footer, body.theme-ocean .popup-menu, body.theme-ocean .popup-menu-title,
+        body.theme-ocean .result-card, body.theme-ocean .input-field, body.theme-ocean .mail-row,
+        body.theme-ocean .toolbar-sep { border-color: #1d3557; }
+        body.theme-ocean .auth-card h1, body.theme-ocean header h1, body.theme-ocean .auth-toggle:hover,
+        body.theme-ocean .result-from, body.theme-ocean .mail-from, body.theme-ocean .modal-header h2,
+        body.theme-ocean .reading-meta .from, body.theme-ocean .settings-section h3 { color: #64ffda; }
+        body.theme-ocean .result-card:hover { border-left-color: #64ffda; }
+        body.theme-ocean .mail-row.selected { border-left-color: #64ffda; }
+        body.theme-ocean .btn-sm:hover { border-color: #64ffda; color: #64ffda; }
+        body.theme-ocean .btn-primary, body.theme-ocean .chat-input button,
+        body.theme-ocean .auth-card button:not(.pw-toggle) { background: #64ffda; color: #0a192f; }
+        body.theme-ocean .auth-card button:not(.pw-toggle):hover,
+        body.theme-ocean .btn-primary:hover { background: #45e0c0; }
+        body.theme-ocean .tab.active { background: #64ffda; color: #0a192f; border-color: #64ffda; }
+        body.theme-ocean .folder-item.active { background: #64ffda; color: #0a192f; }
+        body.theme-ocean .auth-toggle, body.theme-ocean .user-info span, body.theme-ocean .btn-sm,
+        body.theme-ocean .tab, body.theme-ocean .result-count, body.theme-ocean .mail-subject,
+        body.theme-ocean .compose-field label, body.theme-ocean .compose-row label, body.theme-ocean .compose-options label, body.theme-ocean .compose-options-inline label,
+        body.theme-ocean .reading-meta .to, body.theme-ocean .popup-item,
+        body.theme-ocean .folder-item, body.theme-ocean .settings-row label { color: #8892b0; }
+        body.theme-ocean .folder-item[data-storage="local"]:hover { background: #2a1f5e; }
+        body.theme-ocean .theme-card.active { border-color: #64ffda; }
+        body.theme-ocean .settings-row select, body.theme-ocean .settings-row input[type="color"] { background: #0a192f; color: #ccd6f6; border-color: #1d3557; }
+        body.theme-ocean [style*="background:#1e293b"] { background: #172a45 !important; }
+        body.theme-ocean [style*="background:#0f172a"] { background: #0a192f !important; }
+        body.theme-ocean [style*="background:#334155"] { background: #1d3557 !important; }
+        body.theme-ocean [style*="color:#94a3b8"] { color: #8892b0 !important; }
+        body.theme-ocean [style*="color:#e2e8f0"] { color: #ccd6f6 !important; }
+        body.theme-ocean [style*="color:#38bdf8"] { color: #64ffda !important; }
+        body.theme-ocean [style*="border:1px solid #334155"] { border-color: #1d3557 !important; }
+        body.theme-ocean [style*="border-bottom:1px solid #334155"] { border-bottom-color: #1d3557 !important; }
+        body.theme-ocean [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #172a45 !important; }
+        body.theme-ocean [style*="border-top:1px solid #334155"] { border-top-color: #1d3557 !important; }
+        body.theme-ocean [style*="border-left:2px solid #38bdf8"] { border-left-color: #64ffda !important; }
+
+        /* ---- Solarized Light theme ---- */
+        body.theme-solarized { background: #fdf6e3; color: #657b83; }
+        body.theme-solarized .auth-card, body.theme-solarized header, body.theme-solarized .chat-container,
+        body.theme-solarized .result-card, body.theme-solarized .modal-panel, body.theme-solarized .popup-menu,
+        body.theme-solarized .input-field, body.theme-solarized .settings-panel { background: #eee8d5; }
+        body.theme-solarized .auth-card input, body.theme-solarized .chat-input input,
+        body.theme-solarized .chat-msg.assistant, body.theme-solarized .rules-editor textarea,
+        body.theme-solarized .compose-field input, body.theme-solarized .compose-field select,
+        body.theme-solarized .compose-row input, body.theme-solarized .compose-row select,
+        body.theme-solarized .compose-options select, body.theme-solarized .compose-options-inline select, body.theme-solarized .email-toolbar,
+        body.theme-solarized .import-tree-item:hover, body.theme-solarized .mail-row:hover { background: #fdf6e3; }
+        body.theme-solarized .folder-item:hover, body.theme-solarized .chat-msg.user,
+        body.theme-solarized .attachment-chip, body.theme-solarized .popup-item:hover { background: #ddd6c1; }
+        body.theme-solarized .auth-card input, body.theme-solarized .btn-sm, body.theme-solarized .tab,
+        body.theme-solarized .chat-input input, body.theme-solarized .rules-editor textarea,
+        body.theme-solarized .compose-field input, body.theme-solarized .compose-field select,
+        body.theme-solarized .compose-row input, body.theme-solarized .compose-row select,
+        body.theme-solarized .compose-options select, body.theme-solarized .compose-options-inline select, body.theme-solarized .folder-children,
+        body.theme-solarized .local-folders-header, body.theme-solarized .modal-header,
+        body.theme-solarized .modal-footer, body.theme-solarized .popup-menu, body.theme-solarized .popup-menu-title,
+        body.theme-solarized .result-card, body.theme-solarized .input-field, body.theme-solarized .mail-row,
+        body.theme-solarized .toolbar-sep { border-color: #d3cbb7; }
+        body.theme-solarized .auth-card h1, body.theme-solarized header h1, body.theme-solarized .auth-toggle:hover,
+        body.theme-solarized .result-from, body.theme-solarized .mail-from, body.theme-solarized .modal-header h2,
+        body.theme-solarized .reading-meta .from, body.theme-solarized .settings-section h3 { color: #268bd2; }
+        body.theme-solarized .result-card:hover { border-left-color: #268bd2; }
+        body.theme-solarized .mail-row.selected { border-left-color: #268bd2; }
+        body.theme-solarized .btn-sm:hover { border-color: #268bd2; color: #268bd2; }
+        body.theme-solarized .btn-primary, body.theme-solarized .chat-input button,
+        body.theme-solarized .auth-card button:not(.pw-toggle) { background: #268bd2; color: #fff; }
+        body.theme-solarized .auth-card button:not(.pw-toggle):hover,
+        body.theme-solarized .btn-primary:hover { background: #2aa198; }
+        body.theme-solarized .tab.active { background: #268bd2; color: #fff; border-color: #268bd2; }
+        body.theme-solarized .folder-item.active { background: #268bd2; color: #fff; }
+        body.theme-solarized .result-subject, body.theme-solarized .reading-meta .subject,
+        body.theme-solarized .folder-item:hover, body.theme-solarized .popup-item:hover,
+        body.theme-solarized .modal-close:hover, body.theme-solarized .modal-fullscreen-btn:hover,
+        body.theme-solarized .mail-row.unread .mail-from, body.theme-solarized .mail-row.unread .mail-subject { font-weight: 700; }
+        body.theme-solarized .auth-toggle, body.theme-solarized .user-info span, body.theme-solarized .btn-sm,
+        body.theme-solarized .tab, body.theme-solarized .result-count, body.theme-solarized .mail-subject,
+        body.theme-solarized .compose-field label, body.theme-solarized .compose-row label, body.theme-solarized .compose-options label, body.theme-solarized .compose-options-inline label,
+        body.theme-solarized .reading-meta .to, body.theme-solarized .popup-item,
+        body.theme-solarized .folder-item, body.theme-solarized .settings-row label { color: #839496; }
+        body.theme-solarized .folder-item[data-storage="local"]:hover { background: #d5cfe8; }
+        body.theme-solarized .theme-card.active { border-color: #268bd2; }
+        body.theme-solarized .theme-card span:last-child { color: #839496; }
+        body.theme-solarized .mail-filter-row input { background: #fdf6e3; border-color: #d3cbb7; color: #657b83; }
+        body.theme-solarized .mail-filter-row input:focus { border-color: #268bd2; }
+        body.theme-solarized .mail-header { border-bottom-color: #d3cbb7; }
+        body.theme-solarized .mail-header-col.sorted, body.theme-solarized .mail-header-col:hover { color: #268bd2; }
+        body.theme-solarized .pager-btn { border-color: #d3cbb7; color: #839496; }
+        body.theme-solarized .pager-btn:hover { border-color: #268bd2; color: #268bd2; }
+        body.theme-solarized .pager-btn.active { background: #268bd2; color: #fff; border-color: #268bd2; }
+        body.theme-solarized .settings-row select, body.theme-solarized .settings-row input[type="color"] { background: #fdf6e3; color: #657b83; border-color: #d3cbb7; }
+        body.theme-solarized [style*="background:#1e293b"] { background: #eee8d5 !important; }
+        body.theme-solarized [style*="background:#0f172a"] { background: #fdf6e3 !important; }
+        body.theme-solarized [style*="background:#334155"] { background: #ddd6c1 !important; }
+        body.theme-solarized [style*="color:#94a3b8"] { color: #839496 !important; }
+        body.theme-solarized [style*="color:#e2e8f0"] { color: #657b83 !important; }
+        body.theme-solarized [style*="color:#38bdf8"] { color: #268bd2 !important; }
+        body.theme-solarized [style*="border:1px solid #334155"] { border-color: #d3cbb7 !important; }
+        body.theme-solarized [style*="border-bottom:1px solid #334155"] { border-bottom-color: #d3cbb7 !important; }
+        body.theme-solarized [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #eee8d5 !important; }
+        body.theme-solarized [style*="border-top:1px solid #334155"] { border-top-color: #d3cbb7 !important; }
+        body.theme-solarized [style*="border-left:2px solid #38bdf8"] { border-left-color: #268bd2 !important; }
+        body.theme-solarized #preview-pane { background: #f5f0e1; box-shadow: inset 0 4px 8px rgba(0,0,0,0.06); }
+        body.theme-solarized .preview-header { border-bottom-color: #d3cbb7; }
+        body.theme-solarized #preview-subject { color: #657b83 !important; }
+
+        /* ---- Rose theme ---- */
+        body.theme-rose { background: #fff1f2; color: #1e293b; }
+        body.theme-rose .auth-card, body.theme-rose header, body.theme-rose .chat-container,
+        body.theme-rose .result-card, body.theme-rose .modal-panel, body.theme-rose .popup-menu,
+        body.theme-rose .input-field, body.theme-rose .settings-panel { background: #fff; }
+        body.theme-rose .auth-card input, body.theme-rose .chat-input input,
+        body.theme-rose .chat-msg.assistant, body.theme-rose .rules-editor textarea,
+        body.theme-rose .compose-field input, body.theme-rose .compose-field select,
+        body.theme-rose .compose-row input, body.theme-rose .compose-row select,
+        body.theme-rose .compose-options select, body.theme-rose .compose-options-inline select, body.theme-rose .email-toolbar,
+        body.theme-rose .import-tree-item:hover, body.theme-rose .mail-row:hover { background: #fff5f5; }
+        body.theme-rose .folder-item:hover, body.theme-rose .chat-msg.user,
+        body.theme-rose .attachment-chip, body.theme-rose .popup-item:hover { background: #ffe4e6; }
+        body.theme-rose .auth-card input, body.theme-rose .btn-sm, body.theme-rose .tab,
+        body.theme-rose .chat-input input, body.theme-rose .rules-editor textarea,
+        body.theme-rose .compose-field input, body.theme-rose .compose-field select,
+        body.theme-rose .compose-row input, body.theme-rose .compose-row select,
+        body.theme-rose .compose-options select, body.theme-rose .compose-options-inline select, body.theme-rose .folder-children,
+        body.theme-rose .local-folders-header, body.theme-rose .modal-header,
+        body.theme-rose .modal-footer, body.theme-rose .popup-menu, body.theme-rose .popup-menu-title,
+        body.theme-rose .result-card, body.theme-rose .input-field, body.theme-rose .mail-row,
+        body.theme-rose .toolbar-sep { border-color: #fecdd3; }
+        body.theme-rose .auth-card h1, body.theme-rose header h1, body.theme-rose .auth-toggle:hover,
+        body.theme-rose .result-from, body.theme-rose .mail-from, body.theme-rose .modal-header h2,
+        body.theme-rose .reading-meta .from, body.theme-rose .settings-section h3 { color: #e11d48; }
+        body.theme-rose .result-card:hover { border-left-color: #e11d48; }
+        body.theme-rose .mail-row.selected { border-left-color: #e11d48; }
+        body.theme-rose .btn-sm:hover { border-color: #e11d48; color: #e11d48; }
+        body.theme-rose .btn-primary, body.theme-rose .chat-input button,
+        body.theme-rose .auth-card button:not(.pw-toggle) { background: #e11d48; color: #fff; }
+        body.theme-rose .auth-card button:not(.pw-toggle):hover,
+        body.theme-rose .btn-primary:hover { background: #be123c; }
+        body.theme-rose .tab.active { background: #e11d48; color: #fff; border-color: #e11d48; }
+        body.theme-rose .folder-item.active { background: #e11d48; color: #fff; }
+        body.theme-rose .result-subject, body.theme-rose .reading-meta .subject,
+        body.theme-rose .folder-item:hover, body.theme-rose .popup-item:hover,
+        body.theme-rose .modal-close:hover, body.theme-rose .modal-fullscreen-btn:hover,
+        body.theme-rose .mail-row.unread .mail-from, body.theme-rose .mail-row.unread .mail-subject { font-weight: 700; }
+        body.theme-rose .auth-toggle, body.theme-rose .user-info span, body.theme-rose .btn-sm,
+        body.theme-rose .tab, body.theme-rose .result-count, body.theme-rose .mail-subject,
+        body.theme-rose .compose-field label, body.theme-rose .compose-row label, body.theme-rose .compose-options label, body.theme-rose .compose-options-inline label,
+        body.theme-rose .reading-meta .to, body.theme-rose .popup-item,
+        body.theme-rose .folder-item, body.theme-rose .settings-row label { color: #64748b; }
+        body.theme-rose .folder-item[data-storage="local"]:hover { background: #fce7f3; }
+        body.theme-rose .theme-card.active { border-color: #e11d48; }
+        body.theme-rose .theme-card span:last-child { color: #64748b; }
+        body.theme-rose .settings-row select, body.theme-rose .settings-row input[type="color"] { background: #fff5f5; color: #1e293b; border-color: #fecdd3; }
+        body.theme-rose .mail-filter-row input { background: #fff; border-color: #fecdd3; color: #1e293b; }
+        body.theme-rose .mail-filter-row input:focus { border-color: #e11d48; }
+        body.theme-rose .mail-header { border-bottom-color: #fecdd3; }
+        body.theme-rose .mail-header-col.sorted, body.theme-rose .mail-header-col:hover { color: #e11d48; }
+        body.theme-rose .pager-btn { border-color: #fecdd3; color: #64748b; }
+        body.theme-rose .pager-btn:hover { border-color: #e11d48; color: #e11d48; }
+        body.theme-rose .pager-btn.active { background: #e11d48; color: #fff; border-color: #e11d48; }
+        body.theme-rose [style*="background:#1e293b"] { background: #fff !important; }
+        body.theme-rose [style*="background:#0f172a"] { background: #fff5f5 !important; }
+        body.theme-rose [style*="background:#334155"] { background: #ffe4e6 !important; }
+        body.theme-rose [style*="color:#94a3b8"] { color: #64748b !important; }
+        body.theme-rose [style*="color:#e2e8f0"] { color: #1e293b !important; }
+        body.theme-rose [style*="color:#38bdf8"] { color: #e11d48 !important; }
+        body.theme-rose [style*="border:1px solid #334155"] { border-color: #fecdd3 !important; }
+        body.theme-rose [style*="border-bottom:1px solid #334155"] { border-bottom-color: #fecdd3 !important; }
+        body.theme-rose [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #ffe4e6 !important; }
+        body.theme-rose [style*="border-top:1px solid #334155"] { border-top-color: #fecdd3 !important; }
+        body.theme-rose [style*="border-left:2px solid #38bdf8"] { border-left-color: #e11d48 !important; }
+        body.theme-rose #preview-pane { background: #fff5f5; box-shadow: inset 0 4px 8px rgba(0,0,0,0.04); }
+        body.theme-rose .preview-header { border-bottom-color: #fecdd3; }
+        body.theme-rose #preview-subject { color: #1e293b !important; }
+
+        /* ---- Emerald theme ---- */
+        body.theme-emerald { background: #ecfdf5; color: #1e293b; }
+        body.theme-emerald .auth-card, body.theme-emerald header, body.theme-emerald .chat-container,
+        body.theme-emerald .result-card, body.theme-emerald .modal-panel, body.theme-emerald .popup-menu,
+        body.theme-emerald .input-field, body.theme-emerald .settings-panel { background: #fff; }
+        body.theme-emerald .auth-card input, body.theme-emerald .chat-input input,
+        body.theme-emerald .chat-msg.assistant, body.theme-emerald .rules-editor textarea,
+        body.theme-emerald .compose-field input, body.theme-emerald .compose-field select,
+        body.theme-emerald .compose-row input, body.theme-emerald .compose-row select,
+        body.theme-emerald .compose-options select, body.theme-emerald .compose-options-inline select, body.theme-emerald .email-toolbar,
+        body.theme-emerald .import-tree-item:hover, body.theme-emerald .mail-row:hover { background: #f0fdf4; }
+        body.theme-emerald .folder-item:hover, body.theme-emerald .chat-msg.user,
+        body.theme-emerald .attachment-chip, body.theme-emerald .popup-item:hover { background: #d1fae5; }
+        body.theme-emerald .auth-card input, body.theme-emerald .btn-sm, body.theme-emerald .tab,
+        body.theme-emerald .chat-input input, body.theme-emerald .rules-editor textarea,
+        body.theme-emerald .compose-field input, body.theme-emerald .compose-field select,
+        body.theme-emerald .compose-row input, body.theme-emerald .compose-row select,
+        body.theme-emerald .compose-options select, body.theme-emerald .compose-options-inline select, body.theme-emerald .folder-children,
+        body.theme-emerald .local-folders-header, body.theme-emerald .modal-header,
+        body.theme-emerald .modal-footer, body.theme-emerald .popup-menu, body.theme-emerald .popup-menu-title,
+        body.theme-emerald .result-card, body.theme-emerald .input-field, body.theme-emerald .mail-row,
+        body.theme-emerald .toolbar-sep { border-color: #a7f3d0; }
+        body.theme-emerald .auth-card h1, body.theme-emerald header h1, body.theme-emerald .auth-toggle:hover,
+        body.theme-emerald .result-from, body.theme-emerald .mail-from, body.theme-emerald .modal-header h2,
+        body.theme-emerald .reading-meta .from, body.theme-emerald .settings-section h3 { color: #059669; }
+        body.theme-emerald .result-card:hover { border-left-color: #059669; }
+        body.theme-emerald .mail-row.selected { border-left-color: #059669; }
+        body.theme-emerald .btn-sm:hover { border-color: #059669; color: #059669; }
+        body.theme-emerald .btn-primary, body.theme-emerald .chat-input button,
+        body.theme-emerald .auth-card button:not(.pw-toggle) { background: #059669; color: #fff; }
+        body.theme-emerald .auth-card button:not(.pw-toggle):hover,
+        body.theme-emerald .btn-primary:hover { background: #047857; }
+        body.theme-emerald .tab.active { background: #059669; color: #fff; border-color: #059669; }
+        body.theme-emerald .folder-item.active { background: #059669; color: #fff; }
+        body.theme-emerald .result-subject, body.theme-emerald .reading-meta .subject,
+        body.theme-emerald .folder-item:hover, body.theme-emerald .popup-item:hover,
+        body.theme-emerald .modal-close:hover, body.theme-emerald .modal-fullscreen-btn:hover,
+        body.theme-emerald .mail-row.unread .mail-from, body.theme-emerald .mail-row.unread .mail-subject { font-weight: 700; }
+        body.theme-emerald .auth-toggle, body.theme-emerald .user-info span, body.theme-emerald .btn-sm,
+        body.theme-emerald .tab, body.theme-emerald .result-count, body.theme-emerald .mail-subject,
+        body.theme-emerald .compose-field label, body.theme-emerald .compose-row label, body.theme-emerald .compose-options label, body.theme-emerald .compose-options-inline label,
+        body.theme-emerald .reading-meta .to, body.theme-emerald .popup-item,
+        body.theme-emerald .folder-item, body.theme-emerald .settings-row label { color: #475569; }
+        body.theme-emerald .folder-item[data-storage="local"]:hover { background: #d1fae5; }
+        body.theme-emerald .theme-card.active { border-color: #059669; }
+        body.theme-emerald .theme-card span:last-child { color: #475569; }
+        body.theme-emerald .settings-row select, body.theme-emerald .settings-row input[type="color"] { background: #f0fdf4; color: #1e293b; border-color: #a7f3d0; }
+        body.theme-emerald .mail-filter-row input { background: #fff; border-color: #a7f3d0; color: #1e293b; }
+        body.theme-emerald .mail-filter-row input:focus { border-color: #059669; }
+        body.theme-emerald .mail-header { border-bottom-color: #a7f3d0; }
+        body.theme-emerald .mail-header-col.sorted, body.theme-emerald .mail-header-col:hover { color: #059669; }
+        body.theme-emerald .pager-btn { border-color: #a7f3d0; color: #475569; }
+        body.theme-emerald .pager-btn:hover { border-color: #059669; color: #059669; }
+        body.theme-emerald .pager-btn.active { background: #059669; color: #fff; border-color: #059669; }
+        body.theme-emerald [style*="background:#1e293b"] { background: #fff !important; }
+        body.theme-emerald [style*="background:#0f172a"] { background: #f0fdf4 !important; }
+        body.theme-emerald [style*="background:#334155"] { background: #d1fae5 !important; }
+        body.theme-emerald [style*="color:#94a3b8"] { color: #475569 !important; }
+        body.theme-emerald [style*="color:#e2e8f0"] { color: #1e293b !important; }
+        body.theme-emerald [style*="color:#38bdf8"] { color: #059669 !important; }
+        body.theme-emerald [style*="border:1px solid #334155"] { border-color: #a7f3d0 !important; }
+        body.theme-emerald [style*="border-bottom:1px solid #334155"] { border-bottom-color: #a7f3d0 !important; }
+        body.theme-emerald [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #d1fae5 !important; }
+        body.theme-emerald [style*="border-top:1px solid #334155"] { border-top-color: #a7f3d0 !important; }
+        body.theme-emerald [style*="border-left:2px solid #38bdf8"] { border-left-color: #059669 !important; }
+        body.theme-emerald #preview-pane { background: #f0fdf4; box-shadow: inset 0 4px 8px rgba(0,0,0,0.04); }
+        body.theme-emerald .preview-header { border-bottom-color: #a7f3d0; }
+        body.theme-emerald #preview-subject { color: #1e293b !important; }
+
+        /* Preview pane */
+        .preview-header { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: inherit; z-index: 1; border-bottom: 1px solid #334155; }
+        #preview-pane { background: #1e293b; border-radius: 0 0 8px 8px; box-shadow: inset 0 4px 8px rgba(0,0,0,0.15); }
+        #preview-pane.preview-fullscreen { position: fixed; top: 0; left: 0; right: 0; bottom: 0; max-height: 100vh !important; height: 100vh !important; z-index: 999; border-radius: 0; margin: 0; border: none; display: flex; flex-direction: column; }
+        #preview-pane.preview-fullscreen #preview-body-html { flex: 1; height: auto !important; }
+        #preview-pane.preview-fullscreen #preview-body { flex: 1; overflow-y: auto; }
+        .drag-over { outline: 2px dashed #38bdf8 !important; outline-offset: -4px; background: rgba(56,189,248,0.05) !important; }
+        /* Mail column headers */
+        .mail-header { display: grid; grid-template-columns: auto 1fr 2fr auto; gap: 0.4rem; padding: 0.3rem 0.75rem; border-bottom: 2px solid #334155; font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; user-select: none; }
+        .mail-header-col { cursor: pointer; display: flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
+        .mail-header-col:hover { color: #38bdf8; }
+        .mail-header-col.sorted { color: #38bdf8; }
+        .mail-header-col .sort-arrow { font-size: 0.65rem; }
+        .mail-filter-row { display: grid; grid-template-columns: auto 1fr 2fr auto; gap: 0.4rem; padding: 0.2rem 0.75rem; border-bottom: 1px solid #334155; }
+        .mail-filter-row input { background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; padding: 0.15rem 0.4rem; font-size: 0.75rem; width: 100%; }
+        .mail-filter-row input::placeholder { color: #475569; }
+        .mail-filter-row input:focus { border-color: #38bdf8; outline: none; }
+        /* Resize handle */
+        .pane-resize-handle { height: 6px; cursor: row-resize; background: transparent; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .pane-resize-handle:hover, .pane-resize-handle.dragging { background: #334155; }
+        .pane-resize-handle::after { content: ''; width: 40px; height: 3px; border-radius: 2px; background: #475569; }
+        .pane-resize-handle:hover::after { background: #38bdf8; }
+        /* Toolbar */
+        .explorer-toolbar { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .toolbar-icon { padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; min-width: 1.8rem; text-align: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+        .toolbar-icon.icon-flag { font-weight: 900; font-size: 1rem; }
+        .toolbar-icon.icon-pin-btn { font-size: 1rem; }
+        .toolbar-icon.active-on { background: #38bdf8; color: #fff !important; border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.3); }
+        .toolbar-sep { width: 1px; height: 1.2rem; background: #334155; flex-shrink: 0; margin: 0 0.1rem; }
+        .btn-danger-icon { border-color: #ef4444; color: #ef4444; }
+        .btn-danger-icon:hover { background: #ef4444; color: #fff; }
+        /* Mail row checkbox */
+        .mail-row-cb { width: 14px; height: 14px; cursor: pointer; accent-color: #38bdf8; flex-shrink: 0; }
+        .mail-header-cb { width: 14px; height: 14px; cursor: pointer; accent-color: #38bdf8; }
+        /* Pin icon */
+        .icon-pin { color: #38bdf8; font-size: 0.7rem; }
+        .mail-row.pinned { background: rgba(56,189,248,0.05); }
+        /* Bulk selection bar */
+        .bulk-bar { display: flex; gap: 0.3rem; align-items: center; padding: 0.3rem 0.75rem; background: #1e3a5f; border-radius: 4px; margin-bottom: 0.3rem; font-size: 0.8rem; color: #38bdf8; }
+        .bulk-bar button { padding: 0.2rem 0.5rem; border: 1px solid #38bdf8; border-radius: 4px; background: transparent; color: #38bdf8; cursor: pointer; font-size: 0.75rem; }
+        .bulk-bar button:hover { background: #38bdf8; color: #0f172a; }
+        /* Pagination */
+        .pager-btn { padding: 0.25rem 0.5rem; border: 1px solid #334155; border-radius: 4px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.8rem; min-width: 2rem; text-align: center; }
+        .pager-btn:hover { border-color: #38bdf8; color: #38bdf8; }
+        .pager-btn.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 600; }
+        .pager-btn:disabled { opacity: 0.4; cursor: default; }
+        .pager-ellipsis { color: #64748b; padding: 0.25rem 0.3rem; font-size: 0.8rem; }
+
+        /* Settings panel */
+        .settings-panel { background: #1e293b; border-radius: 12px; width: 90%; max-width: 500px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .settings-section { margin-bottom: 1.5rem; }
+        .settings-section h3 { color: #38bdf8; font-size: 0.95rem; margin-bottom: 0.75rem; }
+        .settings-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; }
+        .settings-row label { color: #94a3b8; font-size: 0.9rem; }
+        .settings-row select, .settings-row input[type="color"] { border: 1px solid #334155; border-radius: 6px; background: #0f172a; color: #e2e8f0; padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+        .settings-row input[type="color"] { width: 3rem; height: 2rem; padding: 0.2rem; cursor: pointer; }
+        .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 0.5rem; }
+        .theme-card { text-align: center; cursor: pointer; border: 2px solid transparent; border-radius: 8px; padding: 0.3rem; transition: border-color 0.2s; }
+        .theme-card.active { border-color: #38bdf8; }
+        .theme-card-preview { height: 40px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.1rem; margin-bottom: 0.3rem; }
+        .theme-card span:last-child { font-size: 0.75rem; color: #94a3b8; }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
 
-        .container { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+        .container { max-width: 100%; margin: 0 auto; padding: 1rem; }
 
         /* Auth */
         #auth-view { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
         .auth-card { background: #1e293b; border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; }
         .auth-card h1 { text-align: center; color: #38bdf8; margin-bottom: 1.5rem; font-size: 1.8rem; }
         .auth-card input { width: 100%; padding: 0.75rem; margin-bottom: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 1rem; }
-        .auth-card button { width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 0.5rem; }
-        .auth-card button:hover { background: #7dd3fc; }
+        .auth-card button:not(.pw-toggle) { width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 0.5rem; }
+        .auth-card button:not(.pw-toggle):hover { background: #7dd3fc; }
+        .auth-card .pw-wrap { position: relative; margin-bottom: 0.75rem; }
+        .auth-card .pw-wrap input { margin-bottom: 0; }
+        .auth-card .pw-toggle { position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #64748b; cursor: pointer; font-size: 1.1rem; padding: 0.25rem; width: auto; margin: 0; }
         .auth-toggle { text-align: center; margin-top: 1rem; color: #94a3b8; cursor: pointer; }
         .auth-toggle:hover { color: #38bdf8; }
 
         /* Header */
-        header { background: #1e293b; padding: 1rem; display: flex; justify-content: space-between; align-items: center; border-radius: 12px; margin-bottom: 1rem; }
+        header { background: #1e293b; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; border-radius: 12px; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
         header h1 { color: #38bdf8; font-size: 1.4rem; }
         .user-info { display: flex; align-items: center; gap: 1rem; }
         .user-info span { color: #94a3b8; }
-        .btn-sm { padding: 0.4rem 0.8rem; border: 1px solid #334155; border-radius: 6px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85rem; }
+        .btn-sm { padding: 0.4rem 0.8rem; border: 1px solid #475569; border-radius: 6px; background: transparent; color: #cbd5e1; cursor: pointer; font-size: 0.85rem; }
         .btn-sm:hover { border-color: #38bdf8; color: #38bdf8; }
-        .btn-sm:disabled { opacity: 0.4; cursor: default; }
+        .btn-sm:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
         .btn-primary { padding: 0.5rem 1rem; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
         .btn-primary:hover { background: #7dd3fc; }
         .btn-danger { border: 1px solid #ef4444; border-radius: 6px; background: transparent; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 0.4rem 0.8rem; }
@@ -38,17 +559,11 @@
         .btn-success:hover { background: #4ade80; }
 
         /* Tabs */
-        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-        .tab { padding: 0.6rem 1.2rem; border: 1px solid #334155; border-radius: 8px; background: transparent; color: #94a3b8; cursor: pointer; }
+        .tabs { display: flex; gap: 0.3rem; margin-bottom: 0; flex-wrap: wrap; }
+        .tab { padding: 0.4rem 0.9rem; border: 1px solid #334155; border-radius: 6px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85rem; }
         .tab.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 600; }
 
         /* Search */
-        .search-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-        .search-bar input { flex: 1; padding: 0.75rem; border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #e2e8f0; font-size: 1rem; }
-        .search-bar button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; }
-
-        .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters select, .filters input[type="date"] { padding: 0.5rem; border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; font-size: 0.85rem; }
 
         .result-card { background: #1e293b; border-radius: 8px; padding: 1rem; margin-bottom: 0.5rem; border-left: 3px solid #334155; }
         .result-card:hover { border-left-color: #38bdf8; }
@@ -77,18 +592,28 @@
         .folder-item { padding: 0.3rem 0.4rem; border-radius: 4px; cursor: pointer; color: #94a3b8; font-size: 0.85rem; white-space: nowrap; }
         .folder-item:hover { background: #334155; color: #e2e8f0; }
         .folder-item.active { background: #38bdf8; color: #0f172a; font-weight: 600; }
+        .folder-item[data-storage="local"] { border-left: 2px solid #7c3aed; }
+        .folder-item[data-storage="local"]:hover { background: #2d1b69; }
+        .folder-item[data-storage="local"].active { background: #7c3aed; color: #fff; }
+        .import-tree-item:hover { background: #1e293b; }
+        .import-tree-item.selected { background: #7c3aed33; }
+        .local-folders-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.2rem 0.2rem; margin-top: 0.5rem; border-top: 1px solid #334155; }
+        .local-folders-header span { color: #7c3aed; font-size: 0.8rem; font-weight: 600; }
+        .local-folders-header button { background: none; border: 1px solid #7c3aed; color: #7c3aed; border-radius: 4px; cursor: pointer; font-size: 0.75rem; padding: 0.1rem 0.4rem; line-height: 1.2; }
+        .local-folders-header button:hover { background: #7c3aed; color: #fff; }
         .folder-children { margin-left: 1rem; border-left: 1px solid #334155; padding-left: 0.25rem; }
         .folder-toggle { display: inline-block; width: 1rem; text-align: center; color: #64748b; cursor: pointer; }
-        .mail-row { display: grid; grid-template-columns: auto 1fr 2fr auto; gap: 0.4rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; align-items: center; font-size: 0.85rem; cursor: pointer; }
+        .mail-row { display: grid; grid-template-columns: 20px auto 1fr 2fr auto; gap: 0.4rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; align-items: center; font-size: 0.85rem; cursor: pointer; }
         .mail-row:hover { background: #1e293b; border-radius: 4px; }
         .mail-row.selected { border-left: 3px solid #38bdf8; }
-        .mail-row.unread .mail-from, .mail-row.unread .mail-subject { font-weight: 600; color: #e2e8f0; }
+        .mail-row .mail-from, .mail-row .mail-subject { font-weight: 400; }
+        .mail-row.unread .mail-from, .mail-row.unread .mail-subject { font-weight: 700; }
         .mail-icons { display: flex; gap: 0.2rem; align-items: center; min-width: 2rem; }
         .mail-icons span { font-size: 0.75rem; }
         .mail-from { color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mail-subject { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mail-date { color: #64748b; white-space: nowrap; text-align: right; }
-        .icon-flag { color: #fbbf24; }
+        .icon-flag { color: #ef4444; font-weight: 700; }
         .icon-reply { color: #22c55e; }
         .icon-priority { color: #ef4444; font-weight: bold; }
         .icon-attach { color: #a78bfa; }
@@ -110,13 +635,24 @@
         .modal-body { padding: 0.75rem 1rem; overflow-y: auto; flex: 1; min-height: 0; }
         .modal-footer { display: flex; gap: 0.5rem; padding: 0.6rem 1rem; border-top: 1px solid #334155; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
 
-        /* Compose */
+        /* Compose — compact inline layout */
         .compose-field { margin-bottom: 0.4rem; }
         .compose-field label { display: block; color: #94a3b8; font-size: 0.75rem; margin-bottom: 0.15rem; font-weight: 500; }
         .compose-field input, .compose-field select {
             width: 100%; padding: 0.5rem; border: 1px solid #334155; border-radius: 6px;
             background: #0f172a; color: #e2e8f0; font-size: 0.9rem; font-family: inherit;
         }
+        .compose-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.2rem; }
+        .compose-row label { color: #94a3b8; font-size: 0.75rem; font-weight: 500; white-space: nowrap; min-width: 2.2rem; text-align: right; flex-shrink: 0; }
+        .compose-row input, .compose-row select { flex: 1; padding: 0.25rem 0.5rem; border: 1px solid #334155; border-radius: 4px; background: #0f172a; color: #e2e8f0; font-size: 0.85rem; font-family: inherit; min-width: 0; }
+        .compose-extras-toggle { color: #64748b; font-size: 0.7rem; cursor: pointer; user-select: none; padding: 0.1rem 0; display: inline-flex; align-items: center; gap: 0.2rem; }
+        .compose-extras-toggle:hover { color: #38bdf8; }
+        .compose-extras { border-top: 1px solid #334155; padding-top: 0.2rem; margin-top: 0.1rem; margin-bottom: 0.2rem; }
+        .compose-extras .compose-row { margin-bottom: 0.15rem; }
+        .compose-options-inline { display: flex; gap: 0.8rem; flex-wrap: wrap; padding: 0.15rem 0; align-items: center; margin-left: 2.6rem; }
+        .compose-options-inline label { color: #94a3b8; font-size: 0.75rem; display: flex; align-items: center; gap: 0.2rem; cursor: pointer; }
+        .compose-options-inline select { padding: 0.15rem 0.4rem; border: 1px solid #334155; border-radius: 4px; background: #0f172a; color: #e2e8f0; font-size: 0.75rem; }
+        #compose-editor-wrapper .tox-tinymce { flex: 1; min-height: 0; }
         .compose-options { display: flex; gap: 1rem; flex-wrap: wrap; padding: 0.5rem 0; align-items: center; }
         .compose-options label { color: #94a3b8; font-size: 0.8rem; display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
         .compose-options select { padding: 0.3rem 0.5rem; border: 1px solid #334155; border-radius: 4px; background: #0f172a; color: #e2e8f0; font-size: 0.8rem; }
@@ -139,8 +675,8 @@
 
         @media (max-width: 640px) {
             .filters { flex-direction: column; }
-            .mail-row { grid-template-columns: auto 1fr auto; }
-            .mail-subject { display: none; }
+            .mail-row, .mail-header, .mail-filter-row { grid-template-columns: auto 1fr auto; }
+            .mail-subject, .mail-header-col[data-sort="subject"], .mail-filter-row input:nth-child(3) { display: none; }
         }
     </style>
 </head>
@@ -152,7 +688,13 @@
         <h1>MailIA</h1>
         <div id="login-form">
             <input type="email" id="login-email" placeholder="Email">
-            <input type="password" id="login-password" placeholder="Mot de passe">
+            <div class="pw-wrap">
+                <input type="password" id="login-password" placeholder="Mot de passe" style="padding-right:2.5rem">
+                <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('login-password', this)">&#128065;</button>
+            </div>
+            <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:#94a3b8;cursor:pointer;margin:.25rem 0 .5rem">
+                <input type="checkbox" id="login-remember" style="accent-color:#7c3aed;width:1rem;height:1rem;cursor:pointer"> Se souvenir de moi
+            </label>
             <button onclick="login()">Se connecter</button>
             <p class="auth-toggle" onclick="showForgotPassword()">Mot de passe oublie ?</p>
             <p class="auth-toggle" onclick="toggleAuth()">Pas encore de compte ? S'inscrire</p>
@@ -160,7 +702,10 @@
         <div id="register-form" class="hidden">
             <input type="text" id="reg-username" placeholder="Nom d'utilisateur">
             <input type="email" id="reg-email" placeholder="Email">
-            <input type="password" id="reg-password" placeholder="Mot de passe">
+            <div class="pw-wrap">
+                <input type="password" id="reg-password" placeholder="Mot de passe" style="padding-right:2.5rem">
+                <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('reg-password', this)">&#128065;</button>
+            </div>
             <button onclick="register()">Creer un compte</button>
             <p class="auth-toggle" onclick="toggleAuth()">Deja un compte ? Se connecter</p>
         </div>
@@ -173,8 +718,14 @@
         </div>
         <div id="reset-form" class="hidden">
             <p style="text-align:center;color:#94a3b8;margin-bottom:1rem">Choisissez votre nouveau mot de passe.</p>
-            <input type="password" id="reset-password" placeholder="Nouveau mot de passe">
-            <input type="password" id="reset-password-confirm" placeholder="Confirmer le mot de passe">
+            <div class="pw-wrap">
+                <input type="password" id="reset-password" placeholder="Nouveau mot de passe" style="padding-right:2.5rem">
+                <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('reset-password', this)">&#128065;</button>
+            </div>
+            <div class="pw-wrap">
+                <input type="password" id="reset-password-confirm" placeholder="Confirmer le mot de passe" style="padding-right:2.5rem">
+                <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('reset-password-confirm', this)">&#128065;</button>
+            </div>
             <button onclick="resetPassword()">Reinitialiser</button>
             <p id="reset-msg" style="text-align:center;margin-top:0.5rem"></p>
             <p class="auth-toggle" onclick="showLoginForm()">Retour a la connexion</p>
@@ -187,46 +738,60 @@
 <div id="app-view" class="hidden">
     <div class="container">
         <header>
-            <h1>MailIA</h1>
+            <div style="display:flex;align-items:center;gap:1.5rem">
+                <h1>MailIA</h1>
+                <nav class="tabs" style="margin:0;gap:0.3rem">
+                    <button class="tab active" onclick="switchTab('explorer')">Explorer</button>
+                    <button class="tab" onclick="switchTab('chat')">IA Chat</button>
+                    <button class="tab" onclick="switchTab('rules')">Regles</button>
+                    <button class="tab" onclick="switchTab('accounts')">Comptes</button>
+                    <button class="tab hidden" id="tab-admin-btn" onclick="switchTab('admin')">Admin</button>
+                    <button class="tab hidden" id="tab-status-btn" onclick="switchTab('status')">Status</button>
+                </nav>
+            </div>
             <div class="user-info">
                 <span id="user-display"></span>
+                <button class="btn-sm" onclick="openSettings()" title="Parametres">&#x2699;</button>
                 <button class="btn-sm" onclick="logout()">Deconnexion</button>
             </div>
         </header>
 
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab('search')">Recherche</button>
-            <button class="tab" onclick="switchTab('explorer')">Explorer</button>
-            <button class="tab" onclick="switchTab('chat')">IA Chat</button>
-            <button class="tab" onclick="switchTab('rules')">Regles</button>
-            <button class="tab" onclick="switchTab('accounts')">Comptes</button>
-            <button class="tab hidden" id="tab-admin-btn" onclick="switchTab('admin')">Admin</button>
-            <button class="tab hidden" id="tab-status-btn" onclick="switchTab('status')">Status</button>
-        </div>
-
         <!-- Explorer Tab -->
-        <div id="tab-explorer" class="hidden">
-            <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;flex-wrap:wrap">
-                <select id="explorer-account" class="input-field" onchange="loadFolders()" style="min-width:200px">
-                    <option value="">-- Choisir un compte --</option>
+        <div id="tab-explorer">
+            <div class="explorer-toolbar">
+                <select id="explorer-account" class="input-field" onchange="loadFolders()" style="min-width:180px;padding:0.3rem 0.5rem;font-size:0.8rem">
+                    <option value="">-- Compte --</option>
                 </select>
-                <button class="btn-success" onclick="openCompose()" title="Nouveau message (N)">+ Nouveau</button>
-                <button class="btn-sm" onclick="replyEmail()" id="bar-reply" disabled title="Repondre (R)">Repondre</button>
-                <button class="btn-sm" onclick="replyAllEmail()" id="bar-reply-all" disabled>Repondre a tous</button>
-                <button class="btn-sm" onclick="forwardEmail()" id="bar-forward" disabled>Transferer</button>
-                <button class="btn-sm" onclick="toggleReadStatus()" id="bar-read" disabled>Lu/Non lu</button>
-                <button class="btn-sm" onclick="toggleFlagStatus()" id="bar-flag" disabled style="border-color:#fbbf24;color:#fbbf24">Important</button>
-                <button class="btn-sm" onclick="showMoveDialog(event)" id="bar-move" disabled>Deplacer</button>
-                <button class="btn-danger" onclick="deleteCurrentEmail()" id="bar-delete" disabled style="font-size:0.8rem">Supprimer</button>
-                <button class="btn-sm" onclick="loadMessages()" title="Rafraichir">&#8635;</button>
-                <span id="explorer-status" style="color:#64748b;font-size:0.85rem"></span>
+                <button class="btn-sm toolbar-icon" onclick="openCompose()" title="Nouveau message (N)" style="font-size:1.1rem;font-weight:700">+</button>
+                <span class="toolbar-sep"></span>
+                <button class="btn-sm toolbar-icon" onclick="replyEmail()" id="bar-reply" disabled title="Repondre (R)">&#8617;</button>
+                <button class="btn-sm toolbar-icon" onclick="replyAllEmail()" id="bar-reply-all" disabled title="Repondre a tous">&#8617;&#8617;</button>
+                <button class="btn-sm toolbar-icon" onclick="forwardEmail()" id="bar-forward" disabled title="Transferer">&#10148;</button>
+                <span class="toolbar-sep"></span>
+                <button class="btn-sm toolbar-icon" onclick="toggleReadStatus()" id="bar-read" disabled title="Lu/Non lu">&#9898;</button>
+                <button class="btn-sm toolbar-icon icon-flag" onclick="toggleFlagStatus()" id="bar-flag" disabled title="Important">!</button>
+                <button class="btn-sm toolbar-icon icon-pin-btn" onclick="togglePinStatus()" id="bar-pin" disabled title="Epingler">&#9737;</button>
+                <button class="btn-sm toolbar-icon" onclick="showMoveDialog(event)" id="bar-move" disabled title="Deplacer">&#8631;</button>
+                <button class="btn-sm toolbar-icon" onclick="deleteCurrentEmail()" id="bar-delete" disabled title="Supprimer">&#10005;</button>
+                <span class="toolbar-sep"></span>
+                <input type="text" id="explorer-search" placeholder="Rechercher..." class="input-field" style="flex:1;min-width:120px;padding:0.3rem 0.5rem;font-size:0.8rem" onkeydown="if(event.key==='Enter')searchInFolder()">
+                <button class="btn-sm toolbar-icon" onclick="searchInFolder()" title="Rechercher">&#8981;</button>
+                <button class="btn-sm toolbar-icon" onclick="clearExplorerSearch()" id="explorer-search-clear" style="display:none" title="Effacer">&times;</button>
+                <button class="btn-sm toolbar-icon" onclick="toggleSearchFolders()" id="btn-search-folders" style="display:none" title="Choisir les dossiers">&#9776;</button>
+                <button class="btn-sm toolbar-icon" onclick="toggleGlobalSearch()" id="btn-global-search" title="Recherche globale">&#8853;</button>
+                <button class="btn-sm toolbar-icon" onclick="loadMessages()" title="Rafraichir">&#8635;</button>
+                <span id="explorer-status" style="color:#64748b;font-size:0.8rem"></span>
             </div>
-            <!-- Explorer search -->
-            <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;flex-wrap:wrap">
-                <input type="text" id="explorer-search" placeholder="Rechercher..." class="input-field" style="flex:1;min-width:200px;padding:0.5rem 0.75rem;font-size:0.85rem" onkeydown="if(event.key==='Enter')searchInFolder()">
-                <button class="btn-sm" onclick="searchInFolder()">Rechercher</button>
-                <button class="btn-sm" onclick="clearExplorerSearch()" id="explorer-search-clear" style="display:none">Effacer</button>
-                <button class="btn-sm" onclick="toggleSearchFolders()" id="btn-search-folders" style="font-size:0.8rem;display:none" title="Choisir les dossiers">&#128193; Dossiers</button>
+            <div id="global-search-filters" class="hidden" style="background:#1e293b;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                <span style="color:#94a3b8;font-size:0.8rem;font-weight:500">Filtres :</span>
+                <input type="date" id="global-filter-from" class="input-field" style="font-size:0.8rem;padding:0.3rem 0.5rem" title="Date debut">
+                <input type="date" id="global-filter-to" class="input-field" style="font-size:0.8rem;padding:0.3rem 0.5rem" title="Date fin">
+                <select id="global-filter-attachments" class="input-field" style="font-size:0.8rem;padding:0.3rem 0.5rem">
+                    <option value="">Pieces jointes</option>
+                    <option value="true">Avec PJ</option>
+                    <option value="false">Sans PJ</option>
+                </select>
+                <button class="btn-sm" onclick="doGlobalSearch()" style="font-size:0.8rem">Rechercher</button>
             </div>
             <div id="search-folders-panel" class="hidden" style="background:#1e293b;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;font-size:0.8rem">
                 <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem">
@@ -250,32 +815,62 @@
                 <div style="flex:1;display:flex;flex-direction:column">
                     <div id="explorer-folder-header" style="margin-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center">
                         <span id="explorer-folder-name" style="color:#38bdf8;font-weight:600"></span>
-                        <span id="explorer-folder-count" style="color:#64748b;font-size:0.85rem"></span>
+                        <div style="display:flex;align-items:center;gap:0.5rem">
+                            <button class="btn-sm" id="btn-toggle-pane" onclick="togglePaneMode()" style="font-size:0.75rem;padding:0.2rem 0.5rem" title="Activer/desactiver le panneau de lecture">&#9776; Panneau</button>
+                            <span id="explorer-folder-count" style="color:#64748b;font-size:0.85rem"></span>
+                        </div>
+                    </div>
+                    <div id="bulk-actions-bar" class="bulk-bar hidden">
+                        <input type="checkbox" class="mail-header-cb" id="select-all-cb" onchange="toggleSelectAll(this.checked)" title="Tout selectionner">
+                        <span id="bulk-count">0 selectionne(s)</span>
+                        <button onclick="bulkToggleRead()" title="Lu/Non lu">&#9898; Lu</button>
+                        <button onclick="bulkToggleFlag()" title="Important">! Important</button>
+                        <button onclick="bulkTogglePin()" title="Epingler">&#9737; Pin</button>
+                        <button onclick="bulkMove(event)" title="Deplacer">&#8631; Deplacer</button>
+                        <button onclick="bulkDelete()" title="Supprimer">&#10005; Supprimer</button>
+                        <button onclick="clearSelection()" title="Annuler">&times;</button>
+                    </div>
+                    <div id="mail-list-headers">
+                        <div class="mail-header" style="grid-template-columns:20px auto 1fr 2fr auto">
+                            <input type="checkbox" class="mail-header-cb" id="header-select-all" onchange="toggleSelectAll(this.checked)" title="Tout selectionner">
+                            <div class="mail-header-col" data-sort="icons" style="min-width:2rem"></div>
+                            <div class="mail-header-col" data-sort="from" onclick="sortMailColumn('from')">De <span class="sort-arrow"></span></div>
+                            <div class="mail-header-col" data-sort="subject" onclick="sortMailColumn('subject')">Objet <span class="sort-arrow"></span></div>
+                            <div class="mail-header-col" data-sort="date" onclick="sortMailColumn('date')">Date <span class="sort-arrow"></span></div>
+                        </div>
+                        <div class="mail-filter-row" style="grid-template-columns:20px auto 1fr 2fr auto">
+                            <div></div>
+                            <div></div>
+                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-from">
+                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-subject">
+                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-date">
+                        </div>
                     </div>
                     <div id="explorer-messages" style="flex:1;overflow-y:auto;max-height:70vh"></div>
-                    <div id="explorer-pager" style="display:flex;gap:0.5rem;margin-top:0.5rem;justify-content:center"></div>
+                    <div id="explorer-pager" style="display:flex;gap:0.4rem;margin-top:0.5rem;justify-content:center;align-items:center;flex-wrap:wrap"></div>
+                    <div id="pane-resize-handle" class="pane-resize-handle hidden"></div>
+                    <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;overflow-y:auto;max-height:40vh;margin-top:0">
+                        <div class="preview-header">
+                            <div style="flex:1;min-width:0;overflow:hidden">
+                                <div id="preview-subject" style="font-weight:600;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.9rem"></div>
+                                <div style="font-size:0.75rem;margin-top:0.1rem;display:flex;gap:0.5rem;align-items:center"><span id="preview-from" style="color:#38bdf8"></span><span id="preview-date" style="color:#64748b"></span></div>
+                            </div>
+                            <div style="display:flex;gap:0.2rem;flex-shrink:0;margin-left:0.5rem">
+                                <button class="btn-sm toolbar-icon" onclick="replyEmail()" style="font-size:0.7rem;padding:0.15rem 0.35rem" title="Repondre">&#8617;</button>
+                                <button class="btn-sm toolbar-icon" onclick="forwardEmail()" style="font-size:0.7rem;padding:0.15rem 0.35rem" title="Transferer">&#10148;</button>
+                                <button class="btn-sm toolbar-icon" id="btn-preview-fullscreen" onclick="togglePreviewFullscreen()" style="font-size:0.7rem;padding:0.15rem 0.35rem" title="Plein ecran">&#x26F6;</button>
+                                <button class="btn-sm toolbar-icon" onclick="closePreviewPane()" style="font-size:0.7rem;padding:0.15rem 0.35rem">&times;</button>
+                            </div>
+                        </div>
+                        <div id="preview-to" style="padding:0.1rem 0.75rem;font-size:0.75rem;color:#94a3b8;display:none"></div>
+                        <div id="preview-attachments" style="padding:0.1rem 0.75rem;display:none"></div>
+                        <iframe id="preview-body-html" style="display:none;width:100%;border:none;background:var(--email-bg);height:300px" sandbox="allow-same-origin"></iframe>
+                        <div id="preview-body" style="display:none;padding:0.75rem;color:#cbd5e1;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-word"></div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Search Tab -->
-        <div id="tab-search">
-            <div class="search-bar">
-                <input type="text" id="search-query" placeholder="Rechercher dans vos emails..." onkeydown="if(event.key==='Enter')doSearch()">
-                <button onclick="doSearch()">Rechercher</button>
-            </div>
-            <div class="filters">
-                <input type="date" id="filter-from">
-                <input type="date" id="filter-to">
-                <select id="filter-attachments">
-                    <option value="">Pieces jointes</option>
-                    <option value="true">Avec PJ</option>
-                    <option value="false">Sans PJ</option>
-                </select>
-            </div>
-            <p id="result-count" class="result-count"></p>
-            <div id="results"></div>
-        </div>
 
         <!-- Chat Tab -->
         <div id="tab-chat" class="hidden">
@@ -344,6 +939,47 @@
             <p id="acc-error" style="color:#f87171;margin-top:0.5rem"></p>
             <p id="acc-success" style="color:#4ade80;margin-top:0.5rem"></p>
             <p id="acc-test-result" style="margin-top:0.5rem;font-size:0.85rem"></p>
+
+            <h3 style="margin:2rem 0 1rem;color:#94a3b8">Importer des emails (Thunderbird / mbox)</h3>
+            <div style="background:#1e293b;border-radius:8px;padding:1rem">
+                <p style="color:#64748b;font-size:0.8rem;margin-bottom:0.75rem">
+                    Fichier <strong>.mbox</strong> unique ou <strong>.zip</strong> d'un profil Thunderbird (l'arborescence des dossiers sera recree automatiquement).
+                </p>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.75rem">
+                    <select id="import-account" class="input-field" onchange="loadImportFolders()" style="min-width:200px">
+                        <option value="">-- Compte de destination --</option>
+                    </select>
+                </div>
+
+                <!-- Destination tree -->
+                <div style="margin:0.75rem 0">
+                    <label style="color:#94a3b8;font-size:0.85rem;font-weight:500;display:block;margin-bottom:0.4rem">Destination :</label>
+                    <input type="hidden" id="import-storage" value="imap">
+                    <input type="hidden" id="import-folder" value="">
+                    <div id="import-dest-tree" style="max-height:300px;overflow-y:auto;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:0.5rem;font-size:0.8rem"></div>
+                </div>
+
+                <div style="display:flex;gap:1rem;margin-bottom:0.5rem;font-size:0.85rem">
+                    <label style="cursor:pointer;display:flex;align-items:center;gap:0.3rem">
+                        <input type="radio" name="import-mode" value="file" checked onchange="toggleImportMode()"> Fichier (upload)
+                    </label>
+                    <label style="cursor:pointer;display:flex;align-items:center;gap:0.3rem">
+                        <input type="radio" name="import-mode" value="path" onchange="toggleImportMode()"> Chemin serveur (gros fichiers)
+                    </label>
+                </div>
+                <div id="import-file-mode" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                    <input type="file" id="import-mbox-input" accept=".mbox,.mbx,.zip" style="font-size:0.85rem;color:#e2e8f0">
+                    <button class="btn-primary" onclick="importMbox()">Importer</button>
+                </div>
+                <div id="import-path-mode" style="display:none;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                    <input type="text" id="import-server-path" class="input-field" placeholder="/chemin/vers/fichier.zip ou .mbox" style="flex:1;min-width:250px">
+                    <button class="btn-primary" onclick="importFromPath()">Importer</button>
+                    <p style="color:#64748b;font-size:0.75rem;width:100%;margin-top:0.3rem">Pour les fichiers &gt; 500 Mo : uploader via SCP sur le serveur puis indiquer le chemin ici.</p>
+                </div>
+                <p id="import-status" style="margin-top:0.5rem;font-size:0.85rem"></p>
+                <div id="import-details" style="margin-top:0.5rem"></div>
+                <div id="import-jobs-list" style="margin-top:1rem"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -407,7 +1043,7 @@
         </div>
 
 <!-- Compose Modal -->
-<div id="compose-overlay" class="modal-overlay hidden">
+<div id="compose-overlay" class="modal-overlay hidden" style="z-index:1010">
     <div class="modal-panel">
         <div class="modal-header">
             <h2 id="compose-title">Nouveau message</h2>
@@ -416,52 +1052,42 @@
                 <button class="modal-close" onclick="closeCompose()">&times;</button>
             </div>
         </div>
-        <div class="modal-body" style="display:flex;flex-direction:column">
-            <div class="compose-field">
+        <div class="modal-body" style="display:flex;flex-direction:column;padding:0.5rem 1rem">
+            <div class="compose-row">
                 <label>De</label>
                 <select id="compose-from"></select>
             </div>
-            <div class="compose-field">
+            <div class="compose-row">
                 <label>A</label>
                 <input type="text" id="compose-to" placeholder="destinataire@email.com (virgules pour separer)">
             </div>
-            <div style="margin-bottom:0.3rem">
-                <span style="color:#64748b;font-size:0.75rem;cursor:pointer" onclick="document.getElementById('compose-cc-bcc').classList.toggle('hidden')">+ Cc / Cci</span>
+            <div class="compose-row">
+                <label>Objet</label>
+                <input type="text" id="compose-subject" placeholder="Objet du message">
+                <span class="compose-extras-toggle" id="compose-extras-toggle" onclick="toggleComposeExtras()" title="Cc, Cci, priorite, pieces jointes">&#9662; Plus</span>
             </div>
-            <div id="compose-cc-bcc" class="hidden">
-                <div class="compose-field">
+            <div id="compose-extras" class="compose-extras hidden">
+                <div class="compose-row">
                     <label>Cc</label>
                     <input type="text" id="compose-cc" placeholder="Copies">
                 </div>
-                <div class="compose-field">
-                    <label>Cci (copie cachee)</label>
+                <div class="compose-row">
+                    <label>Cci</label>
                     <input type="text" id="compose-bcc" placeholder="Copies cachees">
                 </div>
+                <div class="compose-options-inline">
+                    <label>Priorite: <select id="compose-priority"><option value="">Normale</option><option value="high">Haute</option><option value="low">Basse</option></select></label>
+                    <label><input type="checkbox" id="compose-read-receipt"> Accuse lecture</label>
+                    <label><input type="checkbox" id="compose-delivery-receipt"> Confirm. livraison</label>
+                </div>
+                <div class="compose-row">
+                    <label>PJ</label>
+                    <input type="file" id="compose-files" multiple onchange="handleFileSelect()" style="font-size:0.8rem">
+                </div>
+                <div class="attachment-list" id="compose-attachments-list" style="margin-left:2.6rem"></div>
             </div>
-            <div class="compose-field">
-                <label>Objet</label>
-                <input type="text" id="compose-subject" placeholder="Objet du message">
-            </div>
-            <div style="flex:1;min-height:0;display:flex;flex-direction:column">
-                <label style="display:block;color:#94a3b8;font-size:0.75rem;margin-bottom:0.15rem;font-weight:500">Message</label>
-                <div id="compose-editor" style="flex:1"></div>
-            </div>
-            <div class="compose-options">
-                <label>
-                    Priorite:
-                    <select id="compose-priority">
-                        <option value="">Normale</option>
-                        <option value="high">Haute (Urgent)</option>
-                        <option value="low">Basse</option>
-                    </select>
-                </label>
-                <label><input type="checkbox" id="compose-read-receipt"> Accuse de lecture</label>
-                <label><input type="checkbox" id="compose-delivery-receipt"> Confirmation de livraison</label>
-            </div>
-            <div class="compose-field">
-                <label>Pieces jointes</label>
-                <input type="file" id="compose-files" multiple onchange="handleFileSelect()" style="font-size:0.85rem">
-                <div class="attachment-list" id="compose-attachments-list"></div>
+            <div id="compose-editor-wrapper" style="flex:1;min-height:200px;display:flex;flex-direction:column">
+                <div id="compose-editor" style="flex:1;min-height:0"></div>
             </div>
         </div>
         <div class="modal-footer">
@@ -491,8 +1117,8 @@
             <button class="modal-fullscreen-btn" onclick="toggleModalFullscreen(this)" title="Plein ecran">&#x26F6;</button>
             <button class="modal-close" onclick="closeReadingPane()">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="reading-meta">
+        <div class="modal-body" style="display:flex;flex-direction:column">
+            <div class="reading-meta" style="flex-shrink:0">
                 <div style="display:flex;align-items:center;gap:0.5rem">
                     <div id="email-subject" class="subject" style="flex:1"></div>
                     <span id="email-priority-badge" class="hidden" style="background:#ef4444;color:#fff;padding:0.1rem 0.5rem;border-radius:4px;font-size:0.7rem;font-weight:600">URGENT</span>
@@ -503,22 +1129,155 @@
                 <div id="email-date" class="date"></div>
                 <div id="email-attachments" style="margin-top:0.5rem;display:none"></div>
             </div>
-            <hr style="border-color:#334155;margin:0.75rem 0">
-            <div id="email-body-html-toggle" style="display:none;margin-bottom:0.5rem">
+            <hr style="border-color:#334155;margin:0.5rem 0;flex-shrink:0">
+            <div id="email-body-html-toggle" style="display:none;margin-bottom:0.3rem;flex-shrink:0">
                 <button onclick="toggleHtmlView()" class="btn-sm" id="btn-html-toggle">Voir en texte</button>
             </div>
-            <iframe id="email-body-html" style="display:none;width:100%;border:none;border-radius:4px;background:#fff;flex:1;min-height:500px" sandbox="allow-same-origin"></iframe>
-            <div id="email-body" style="display:none;color:#cbd5e1;font-size:0.9rem;line-height:1.5;white-space:pre-wrap;word-break:break-word"></div>
+            <iframe id="email-body-html" style="display:none;width:100%;border:none;border-radius:4px;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-same-origin"></iframe>
+            <div id="email-body" style="display:none;color:#cbd5e1;font-size:0.9rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;flex:1;overflow-y:auto;min-height:0"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settings-overlay" class="modal-overlay hidden" style="z-index:1020">
+    <div class="settings-panel">
+        <div class="modal-header">
+            <h2>Parametres</h2>
+            <button class="modal-close" onclick="closeSettings()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h3>Apparence</h3>
+                <div style="margin-bottom:0.5rem">
+                    <label style="color:#94a3b8;font-size:0.9rem;display:block;margin-bottom:0.5rem">Theme</label>
+                    <div class="theme-grid">
+                        <div class="theme-card active" data-theme="dark" onclick="setTheme('dark')">
+                            <div class="theme-card-preview" style="background:#0f172a"><span style="color:#38bdf8">Aa</span></div>
+                            <span>Sombre</span>
+                        </div>
+                        <div class="theme-card" data-theme="light" onclick="setTheme('light')">
+                            <div class="theme-card-preview" style="background:#f1f5f9"><span style="color:#0284c7">Aa</span></div>
+                            <span>Clair</span>
+                        </div>
+                        <div class="theme-card" data-theme="nord" onclick="setTheme('nord')">
+                            <div class="theme-card-preview" style="background:#2e3440"><span style="color:#88c0d0">Aa</span></div>
+                            <span>Nord</span>
+                        </div>
+                        <div class="theme-card" data-theme="dracula" onclick="setTheme('dracula')">
+                            <div class="theme-card-preview" style="background:#282a36"><span style="color:#bd93f9">Aa</span></div>
+                            <span>Dracula</span>
+                        </div>
+                        <div class="theme-card" data-theme="ocean" onclick="setTheme('ocean')">
+                            <div class="theme-card-preview" style="background:#0a192f"><span style="color:#64ffda">Aa</span></div>
+                            <span>Ocean</span>
+                        </div>
+                        <div class="theme-card" data-theme="solarized" onclick="setTheme('solarized')">
+                            <div class="theme-card-preview" style="background:#fdf6e3"><span style="color:#268bd2">Aa</span></div>
+                            <span>Solarized</span>
+                        </div>
+                        <div class="theme-card" data-theme="rose" onclick="setTheme('rose')">
+                            <div class="theme-card-preview" style="background:#fff1f2"><span style="color:#e11d48">Aa</span></div>
+                            <span>Rose</span>
+                        </div>
+                        <div class="theme-card" data-theme="emerald" onclick="setTheme('emerald')">
+                            <div class="theme-card-preview" style="background:#ecfdf5"><span style="color:#059669">Aa</span></div>
+                            <span>Emeraude</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <label>Mode de lecture</label>
+                    <select id="setting-reading-mode" onchange="setReadingMode(this.value)">
+                        <option value="modal">Modale</option>
+                        <option value="pane">Panneau</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label>Fond des emails</label>
+                    <input type="color" id="setting-email-bg" value="#ffffff" onchange="setEmailBg(this.value)">
+                </div>
+            </div>
+            <div class="settings-section">
+                <h3>Mise en page</h3>
+                <div class="settings-row">
+                    <label>Largeur</label>
+                    <select id="setting-layout" onchange="setLayout(this.value)">
+                        <option value="1100">Compact</option>
+                        <option value="1400">Standard</option>
+                        <option value="1600">Large</option>
+                        <option value="100%">Plein ecran</option>
+                    </select>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
 // Detect base path from URL (/mailia → /mailia/api, / → /api)
-const _base = window.location.pathname.match(/^(\/[^\/]+)/)?.[1] || '';
+// Exclude /static which is the file-serving path, not a route prefix
+const _rawBase = window.location.pathname.match(/^(\/[^\/]+)/)?.[1] || '';
+const _base = _rawBase === '/static' ? '' : _rawBase;
 const API = _base + '/api';
 let token = localStorage.getItem('mailia_token');
 let aiProvidersCache = [];
+
+// Settings
+const _defaultSettings = { theme: 'dark', emailBg: '#ffffff', layout: '100%', readingMode: 'modal' };
+function _loadSettings() {
+    try { return { ..._defaultSettings, ...JSON.parse(localStorage.getItem('mailia_settings') || '{}') }; } catch { return { ..._defaultSettings }; }
+}
+function _saveSettings(s) { localStorage.setItem('mailia_settings', JSON.stringify(s)); }
+function _applySettings() {
+    const s = _loadSettings();
+    document.body.className = document.body.className.replace(/\btheme-\S+/g, '');
+    if (s.theme !== 'dark') document.body.classList.add('theme-' + s.theme);
+    document.documentElement.style.setProperty('--email-bg', s.emailBg);
+    const mw = s.layout === '100%' ? '100%' : s.layout + 'px';
+    document.querySelectorAll('.container').forEach(c => c.style.maxWidth = mw);
+    document.querySelectorAll('.theme-card').forEach(c => c.classList.toggle('active', c.dataset.theme === s.theme));
+    const bgInput = document.getElementById('setting-email-bg');
+    if (bgInput) bgInput.value = s.emailBg;
+    const layoutSelect = document.getElementById('setting-layout');
+    if (layoutSelect) layoutSelect.value = s.layout;
+    const rmSel = document.getElementById('setting-reading-mode');
+    if (rmSel) rmSel.value = s.readingMode;
+    const paneBtn = document.getElementById('btn-toggle-pane');
+    if (paneBtn) {
+        const active = s.readingMode === 'pane';
+        paneBtn.style.borderColor = active ? '#38bdf8' : '';
+        paneBtn.style.color = active ? '#fff' : '';
+        paneBtn.style.background = active ? '#38bdf8' : '';
+        paneBtn.innerHTML = active ? '&#9776; Panneau &#x2713;' : '&#9776; Panneau';
+    }
+    if (s.readingMode === 'modal') {
+        const pp = document.getElementById('preview-pane');
+        if (pp && !pp.classList.contains('hidden')) { pp.classList.remove('preview-fullscreen'); pp.classList.add('hidden'); document.getElementById('pane-resize-handle')?.classList.add('hidden'); document.getElementById('explorer-messages').style.maxHeight = '70vh'; }
+    }
+}
+function setTheme(theme) { const s = _loadSettings(); s.theme = theme; _saveSettings(s); _applySettings(); }
+function setEmailBg(color) { const s = _loadSettings(); s.emailBg = color; _saveSettings(s); _applySettings(); }
+function setLayout(val) { const s = _loadSettings(); s.layout = val; _saveSettings(s); _applySettings(); }
+function setReadingMode(val) { const s = _loadSettings(); s.readingMode = val; _saveSettings(s); _applySettings(); }
+function togglePaneMode() {
+    const s = _loadSettings();
+    const newMode = s.readingMode === 'pane' ? 'modal' : 'pane';
+    s.readingMode = newMode;
+    _saveSettings(s);
+    _applySettings();
+    // If switching to pane and an email is already selected, show it in pane
+    if (newMode === 'pane') {
+        const selected = document.querySelector('.mail-row.selected');
+        if (selected) {
+            const uid = selected.dataset.uid;
+            if (uid) openEmailInPane(uid, selected);
+        }
+    }
+}
+function openSettings() { _applySettings(); document.getElementById('settings-overlay').classList.remove('hidden'); }
+function closeSettings() { document.getElementById('settings-overlay').classList.add('hidden'); }
+_applySettings();
 
 // Cookie helpers
 function setCookie(k, v, days) { const d = new Date(); d.setTime(d.getTime() + (days||30)*86400000); document.cookie = k + '=' + encodeURIComponent(v) + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax'; }
@@ -629,6 +1388,7 @@ async function login() {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({
             email: document.getElementById('login-email').value,
             password: document.getElementById('login-password').value,
+            remember_me: document.getElementById('login-remember').checked,
         })});
         token = data.access_token;
         localStorage.setItem('mailia_token', token);
@@ -672,10 +1432,16 @@ async function initApp() {
     await loadAccounts();
     loadExplorerAccounts();
     loadAIProviders();
+    loadImportJobs();
 
-    // Restore saved tab
-    const savedTab = getCookie('mailia_tab');
-    if (savedTab) {
+    // Resume polling for active import job
+    const activeJob = localStorage.getItem('mailia_import_job');
+    if (activeJob) _startJobPolling(activeJob);
+
+    // Restore saved tab (map old 'search' to 'explorer')
+    let savedTab = getCookie('mailia_tab');
+    if (savedTab === 'search') savedTab = 'explorer';
+    if (savedTab && savedTab !== 'explorer') {
         const tabBtn = document.querySelector(`.tab[onclick*="'${savedTab}'"]`);
         if (tabBtn) tabBtn.click();
     }
@@ -688,8 +1454,13 @@ async function initApp() {
             sel.value = savedAcct;
             await loadFolders();
             const savedFolder = getCookie('mailia_folder');
-            if (savedFolder && explorerFoldersCache.some(f => f.path === savedFolder)) {
-                await selectFolder(savedFolder);
+            const savedStorage = getCookie('mailia_storage') || 'imap';
+            if (savedFolder) {
+                if (savedStorage === 'local' && explorerLocalFoldersCache.some(f => f.path === savedFolder)) {
+                    await selectFolder(savedFolder, 'local');
+                } else if (explorerFoldersCache.some(f => f.path === savedFolder)) {
+                    await selectFolder(savedFolder, 'imap');
+                }
             }
         }
     }
@@ -702,33 +1473,429 @@ function switchTab(name) {
     });
     document.getElementById('tab-' + name).classList.remove('hidden');
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    event.target.classList.add('active');
+    const btn = document.querySelector(`.tab[onclick*="'${name}'"]`);
+    if (btn) btn.classList.add('active');
     setCookie('mailia_tab', name);
     if (name === 'admin') loadAdminPanel();
     if (name === 'status') loadStatusPanel();
 }
 
-// === Search ===
-async function doSearch() {
-    const q = document.getElementById('search-query').value;
+// === Global Search (Elasticsearch) ===
+let globalSearchMode = false;
+
+function toggleGlobalSearch() {
+    globalSearchMode = !globalSearchMode;
+    const btn = document.getElementById('btn-global-search');
+    const filters = document.getElementById('global-search-filters');
+    const searchInput = document.getElementById('explorer-search');
+    if (globalSearchMode) {
+        btn.style.background = '#38bdf8';
+        btn.style.color = '#0f172a';
+        btn.style.fontWeight = '600';
+        filters.classList.remove('hidden');
+        searchInput.placeholder = 'Recherche globale dans tous les emails...';
+    } else {
+        btn.style.background = '';
+        btn.style.color = '';
+        btn.style.fontWeight = '';
+        filters.classList.add('hidden');
+        searchInput.placeholder = 'Rechercher dans le dossier...';
+    }
+}
+
+async function doGlobalSearch() {
+    const q = document.getElementById('explorer-search').value.trim();
+    if (!q) return;
     const params = new URLSearchParams({ q });
-    const df = document.getElementById('filter-from').value;
-    const dt = document.getElementById('filter-to').value;
-    const att = document.getElementById('filter-attachments').value;
+    const df = document.getElementById('global-filter-from').value;
+    const dt = document.getElementById('global-filter-to').value;
+    const att = document.getElementById('global-filter-attachments').value;
     if (df) params.set('date_from', df);
     if (dt) params.set('date_to', dt);
     if (att) params.set('has_attachments', att);
 
-    const data = await api('/search/?' + params);
-    document.getElementById('result-count').textContent = `${data.total} resultats`;
-    document.getElementById('results').innerHTML = data.results.map(r => `
-        <div class="result-card">
-            <div class="result-from">${esc(r.from_addr)}</div>
-            <div class="result-subject">${esc(r.subject)}</div>
-            <div class="result-date">${r.date} | ${r.folder}
-                ${r.has_attachments ? '<span style="color:#a78bfa"> PJ</span>' : ''}</div>
-            ${r.highlight?.body ? '<div class="result-highlight">' + r.highlight.body.join('...') + '</div>' : ''}
-        </div>`).join('');
+    const msgEl = document.getElementById('explorer-messages');
+    msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Recherche globale...</p>';
+    document.getElementById('explorer-folder-name').textContent = 'Recherche globale';
+    document.getElementById('explorer-pager').innerHTML = '';
+    document.getElementById('explorer-search-clear').style.display = 'inline-block';
+
+    try {
+        const data = await api('/search/?' + params);
+        document.getElementById('explorer-folder-count').textContent = data.total + ' resultat(s)';
+        if (!data.results.length) {
+            msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Aucun resultat</p>';
+        } else {
+            msgEl.innerHTML = data.results.map(r => `
+                <div class="result-card" style="margin-bottom:0.5rem">
+                    <div class="result-from">${esc(r.from_addr)}</div>
+                    <div class="result-subject">${esc(r.subject)}</div>
+                    <div class="result-date">${r.date} | ${folderDisplayName(r.folder) || r.folder}
+                        ${r.has_attachments ? '<span style="color:#a78bfa"> PJ</span>' : ''}</div>
+                    ${r.highlight?.body ? '<div class="result-highlight">' + r.highlight.body.join('...') + '</div>' : ''}
+                </div>`).join('');
+        }
+    } catch(e) {
+        msgEl.innerHTML = `<p style="color:#f87171;padding:1rem">Erreur: ${esc(e.message)}</p>`;
+    }
+}
+
+// === Import Thunderbird/mbox ===
+let _importPollTimer = null;
+
+function toggleImportMode() {
+    const mode = document.querySelector('input[name="import-mode"]:checked').value;
+    document.getElementById('import-file-mode').style.display = mode === 'file' ? 'flex' : 'none';
+    document.getElementById('import-path-mode').style.display = mode === 'path' ? 'flex' : 'none';
+}
+
+let _importFoldersData = null;
+let _importSelectedFolder = null;  // null = root of selected storage
+let _importSelectedStorage = 'imap';
+
+async function loadImportFolders() {
+    const accountId = document.getElementById('import-account').value;
+    _importFoldersData = null;
+    _importSelectedFolder = null;
+    _importSelectedStorage = 'imap';
+    const treeEl = document.getElementById('import-dest-tree');
+    if (!accountId) { treeEl.innerHTML = '<p style="color:#64748b;font-size:0.8rem">Selectionnez un compte</p>'; return; }
+    try {
+        _importFoldersData = await api('/accounts/' + accountId + '/folders');
+        _renderImportDestTree();
+    } catch(e) {
+        treeEl.innerHTML = '<p style="color:#f87171;font-size:0.8rem">Erreur chargement dossiers</p>';
+    }
+}
+
+function _buildLocalTree(flatFolders) {
+    const map = {};
+    const roots = [];
+    for (const lf of flatFolders) {
+        map[lf.path] = { name: lf.name, path: lf.path, storage: 'local', children: [] };
+    }
+    for (const lf of flatFolders) {
+        const node = map[lf.path];
+        let parentPath = null;
+        if (lf.path.includes('/')) {
+            parentPath = lf.path.substring(0, lf.path.lastIndexOf('/'));
+        } else if (lf.path.startsWith('INBOX.')) {
+            parentPath = 'INBOX';
+        }
+        if (parentPath && map[parentPath]) {
+            map[parentPath].children.push(node);
+        } else {
+            roots.push(node);
+        }
+    }
+    return roots;
+}
+
+function _renderImportDestTree() {
+    const treeEl = document.getElementById('import-dest-tree');
+    if (!_importFoldersData) {
+        treeEl.innerHTML = '<p style="color:#64748b">Selectionnez un compte d\'abord</p>';
+        return;
+    }
+
+    // Set default selection to IMAP root
+    _importSelectedStorage = 'imap';
+    _importSelectedFolder = null;
+    document.getElementById('import-storage').value = 'imap';
+    document.getElementById('import-folder').value = '';
+
+    let html = '';
+
+    // --- IMAP section ---
+    html += `<div class="import-tree-item" data-path="" data-storage="imap"
+        onclick="selectImportDest(this)" style="padding:0.35rem 0.5rem;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:0.4rem;background:#7c3aed33;border-bottom:1px solid #1e293b;margin-bottom:0.2rem">
+        <span style="color:#38bdf8;font-size:0.9rem">\u{1F4E7}</span>
+        <span style="color:#38bdf8;font-weight:600;font-size:0.8rem">IMAP</span>
+        <span style="color:#475569;font-size:0.7rem;margin-left:auto">synchronise</span>
+    </div>`;
+    html += `<div id="import-imap-children">`;
+    html += _renderImportSubtree(_importFoldersData.folders || [], 'imap', 0);
+    html += `</div>`;
+
+    // --- Local section ---
+    const localTree = _buildLocalTree(_importFoldersData.local_folders || []);
+    html += `<div class="import-tree-item" data-path="" data-storage="local"
+        onclick="selectImportDest(this)" style="padding:0.35rem 0.5rem;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem;border-bottom:1px solid #1e293b;margin-bottom:0.2rem">
+        <span style="color:#a78bfa;font-size:0.9rem">\u{1F4BE}</span>
+        <span style="color:#a78bfa;font-weight:600;font-size:0.8rem">Local</span>
+        <span style="color:#475569;font-size:0.7rem;margin-left:auto">non synchronise</span>
+        <button onclick="event.stopPropagation();createLocalFolderForImport()" style="background:none;border:1px solid #7c3aed;color:#a78bfa;border-radius:4px;padding:0 6px;font-size:0.65rem;cursor:pointer;margin-left:0.3rem">+</button>
+    </div>`;
+    html += `<div id="import-local-children">`;
+    if (localTree.length === 0) {
+        html += '<p style="color:#475569;font-size:0.73rem;padding:0.15rem 0.5rem 0.15rem 24px">Aucun dossier local</p>';
+    } else {
+        html += _renderImportSubtree(localTree, 'local', 0);
+    }
+    html += `</div>`;
+
+    treeEl.innerHTML = html;
+}
+
+function _renderImportSubtree(folders, storage, depth) {
+    let html = '';
+    const color = storage === 'imap' ? '#38bdf8' : '#a78bfa';
+    for (const f of folders) {
+        const hasChildren = f.children && f.children.length > 0;
+        const indent = depth * 16 + 16;
+        const selectable = !f.noselect;
+        const fid = 'imp-' + btoa(unescape(encodeURIComponent(storage + ':' + f.path))).replace(/[^a-zA-Z0-9]/g, '');
+        if (selectable) {
+            html += `<div class="import-tree-item" data-path="${escAttr(f.path)}" data-storage="${storage}"
+                onclick="selectImportDest(this)" style="padding:0.2rem 0;padding-left:${indent}px;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:0.3rem">`;
+        } else {
+            html += `<div style="padding:0.2rem 0;padding-left:${indent}px;color:#64748b;display:flex;align-items:center;gap:0.3rem">`;
+        }
+        if (hasChildren) {
+            html += `<span style="cursor:pointer;font-size:0.6rem;width:12px;text-align:center" onclick="event.stopPropagation();const c=document.getElementById('${fid}c');if(c){c.style.display=c.style.display==='none'?'block':'none';this.textContent=c.style.display==='none'?'\\u25B6':'\\u25BC'}">\u{25B6}</span>`;
+        } else {
+            html += '<span style="width:12px"></span>';
+        }
+        html += `<span style="color:${color};font-size:0.8rem">\u{1F4C1}</span> ${esc(f.name)}`;
+        html += '</div>';
+        if (hasChildren) {
+            html += `<div id="${fid}c" style="display:none">${_renderImportSubtree(f.children, storage, depth + 1)}</div>`;
+        }
+    }
+    return html;
+}
+
+function selectImportDest(el) {
+    document.querySelectorAll('.import-tree-item').forEach(x => x.style.background = '');
+    el.style.background = '#7c3aed33';
+    _importSelectedStorage = el.dataset.storage;
+    _importSelectedFolder = el.dataset.path || null;
+    document.getElementById('import-storage').value = _importSelectedStorage;
+    document.getElementById('import-folder').value = _importSelectedFolder || '';
+}
+
+async function createLocalFolderForImport() {
+    const accountId = document.getElementById('import-account').value;
+    if (!accountId) { alert('Selectionnez un compte d\'abord.'); return; }
+    const name = prompt('Nom du dossier local :');
+    if (!name || !name.trim()) return;
+    try {
+        await api('/accounts/' + accountId + '/local-folders', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: name.trim() })
+        });
+        _importFoldersData = await api('/accounts/' + accountId + '/folders');
+        _renderImportDestTree();
+        if (typeof loadFolders === 'function') loadFolders();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+function _formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' o';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' Ko';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' Mo';
+    return (bytes / 1073741824).toFixed(2) + ' Go';
+}
+
+function importMbox() {
+    const input = document.getElementById('import-mbox-input');
+    const file = input.files[0];
+    if (!file) { alert('Selectionnez un fichier mbox ou zip.'); return; }
+
+    const accountId = document.getElementById('import-account').value;
+    if (!accountId) { alert('Selectionnez un compte de destination.'); return; }
+
+    const importStorage = _importSelectedStorage;
+    const folder = _importSelectedFolder || '';
+
+    const statusEl = document.getElementById('import-status');
+    const detailsEl = document.getElementById('import-details');
+    detailsEl.innerHTML = '';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    let url = API + '/accounts/' + accountId + '/import-mbox?storage=' + encodeURIComponent(importStorage);
+    if (folder) url += '&folder=' + encodeURIComponent(folder);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    const uploadStart = Date.now();
+
+    xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+            const pct = Math.round(e.loaded / e.total * 100);
+            const elapsed = (Date.now() - uploadStart) / 1000;
+            const speed = elapsed > 0 ? e.loaded / elapsed : 0;
+            const remaining = speed > 0 ? Math.round((e.total - e.loaded) / speed) : 0;
+            const remStr = remaining > 60 ? Math.round(remaining / 60) + ' min' : remaining + ' sec';
+            statusEl.innerHTML =
+                `<span style="color:#fbbf24">Upload: ${pct}% — ${_formatSize(e.loaded)} / ${_formatSize(e.total)}</span>` +
+                `<span style="color:#64748b;font-size:0.75rem;margin-left:0.5rem">${_formatSize(speed)}/s — ~${remStr} restant</span>` +
+                `<div style="background:#334155;border-radius:4px;height:8px;margin-top:0.4rem;overflow:hidden">` +
+                `<div style="background:#fbbf24;height:100%;width:${pct}%;transition:width 0.3s"></div></div>`;
+        }
+    };
+
+    xhr.upload.onload = () => {
+        statusEl.innerHTML = '<span style="color:#fbbf24">Upload termine. Demarrage de l\'import...</span>';
+    };
+
+    xhr.onload = () => {
+        if (xhr.status >= 400) {
+            try {
+                statusEl.innerHTML = `<span style="color:#f87171">Erreur: ${esc(JSON.parse(xhr.responseText).detail)}</span>`;
+            } catch(_) {
+                statusEl.innerHTML = `<span style="color:#f87171">Erreur ${xhr.status}</span>`;
+            }
+            return;
+        }
+        try {
+            const data = JSON.parse(xhr.responseText);
+            if (data.job_id) {
+                _startJobPolling(data.job_id);
+            }
+        } catch(_) {}
+        input.value = '';
+    };
+
+    xhr.onerror = () => {
+        statusEl.innerHTML = '<span style="color:#f87171">Erreur reseau lors de l\'upload.</span>';
+    };
+
+    xhr.send(formData);
+}
+
+async function importFromPath() {
+    const path = document.getElementById('import-server-path').value.trim();
+    if (!path) { alert('Entrez le chemin du fichier sur le serveur.'); return; }
+
+    const accountId = document.getElementById('import-account').value;
+    if (!accountId) { alert('Selectionnez un compte de destination.'); return; }
+
+    const importStorage = _importSelectedStorage;
+    const folder = _importSelectedFolder || '';
+
+    const statusEl = document.getElementById('import-status');
+    statusEl.innerHTML = '<span style="color:#fbbf24">Demarrage...</span>';
+
+    let url = '/accounts/' + accountId + '/import-path?path=' + encodeURIComponent(path) + '&storage=' + encodeURIComponent(importStorage);
+    if (folder) url += '&folder=' + encodeURIComponent(folder);
+
+    try {
+        const data = await api(url, { method: 'POST' });
+        if (data.job_id) _startJobPolling(data.job_id);
+    } catch(e) {
+        statusEl.innerHTML = `<span style="color:#f87171">Erreur: ${esc(e.message)}</span>`;
+    }
+}
+
+function _startJobPolling(jobId) {
+    localStorage.setItem('mailia_import_job', jobId);
+    if (_importPollTimer) clearInterval(_importPollTimer);
+    _importPollTimer = setInterval(() => _pollImportJob(jobId), 2000);
+    _pollImportJob(jobId);
+}
+
+async function _pollImportJob(jobId) {
+    const statusEl = document.getElementById('import-status');
+    const detailsEl = document.getElementById('import-details');
+    try {
+        const job = await api('/accounts/import-jobs/' + jobId);
+        _renderImportJob(job, statusEl, detailsEl);
+        if (job.status === 'done' || job.status === 'error') {
+            clearInterval(_importPollTimer);
+            _importPollTimer = null;
+            localStorage.removeItem('mailia_import_job');
+            loadImportJobs();
+        }
+    } catch(e) {
+        // Job not found or network error — keep polling briefly
+    }
+}
+
+function _renderImportJob(job, statusEl, detailsEl) {
+    const p = job.progress || {};
+    const pct = p.total > 0 ? Math.round((p.current || 0) / p.total * 100) : 0;
+
+    if (job.status === 'uploading' || job.status === 'queued') {
+        statusEl.innerHTML = `<span style="color:#fbbf24">En attente de traitement... (${esc(job.filename)})</span>`;
+    } else if (job.status === 'extracting') {
+        statusEl.innerHTML = `<span style="color:#fbbf24">Extraction de l'archive ZIP...</span>`;
+    } else if (job.status === 'importing') {
+        statusEl.innerHTML =
+            `<span style="color:#fbbf24">Import en cours: ${pct}% — ${p.current || 0}/${p.total || '?'} emails</span>` +
+            `<div style="background:#334155;border-radius:4px;height:8px;margin-top:0.4rem;overflow:hidden">` +
+            `<div style="background:#38bdf8;height:100%;width:${pct}%;transition:width 0.3s"></div></div>` +
+            `<span style="color:#64748b;font-size:0.8rem">${p.imported || 0} importes, ${p.skipped || 0} doublons, ${p.errors || 0} erreurs` +
+            `${p.current_folder ? ' — ' + esc(p.current_folder) : ''}</span>`;
+    } else if (job.status === 'done') {
+        statusEl.innerHTML =
+            `<span style="color:#4ade80;font-weight:600">Import termine</span>` +
+            `<div style="margin-top:0.3rem;font-size:0.85rem;color:#e2e8f0">` +
+            `<span style="color:#4ade80">${p.imported || 0}</span> importe(s) &bull; ` +
+            `<span style="color:#64748b">${p.skipped || 0}</span> doublon(s) &bull; ` +
+            `<span style="color:${p.errors?'#f87171':'#64748b'}">${p.errors || 0}</span> erreur(s) &bull; ` +
+            `Total: ${p.current || 0} email(s)</div>`;
+    } else if (job.status === 'error') {
+        statusEl.innerHTML = `<span style="color:#f87171">Erreur: ${esc(job.error || 'Erreur inconnue')}</span>`;
+    } else if (job.status === 'interrupted') {
+        statusEl.innerHTML =
+            `<span style="color:#fbbf24">Import interrompu a ${p.current || 0}/${p.total || '?'} emails</span>` +
+            `<div style="margin-top:0.3rem"><button class="btn-primary" onclick="resumeImportJob('${esc(job.id)}', ${job.account_id})">Reprendre l'import</button></div>`;
+    }
+
+    // Render folders done table
+    if (job.folders_done && job.folders_done.length > 0) {
+        let html = '<table style="width:100%;font-size:0.8rem;margin-top:0.5rem"><thead><tr style="color:#64748b"><th style="text-align:left;padding:0.2rem">Dossier</th><th style="text-align:right;padding:0.2rem">Importes</th><th style="text-align:right;padding:0.2rem">Doublons</th><th style="text-align:right;padding:0.2rem">Erreurs</th></tr></thead><tbody>';
+        for (const fd of job.folders_done) {
+            const color = fd.errors ? '#f87171' : '#4ade80';
+            html += `<tr><td style="padding:0.2rem;color:#e2e8f0">${esc(fd.folder)}</td><td style="text-align:right;padding:0.2rem;color:${color}">${fd.imported}</td><td style="text-align:right;padding:0.2rem;color:#64748b">${fd.skipped}</td><td style="text-align:right;padding:0.2rem;color:${fd.errors?'#f87171':'#64748b'}">${fd.errors}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        detailsEl.innerHTML = html;
+    }
+}
+
+async function resumeImportJob(jobId, accountId) {
+    const statusEl = document.getElementById('import-status');
+    statusEl.innerHTML = '<span style="color:#fbbf24">Reprise en cours...</span>';
+    try {
+        const data = await api('/accounts/' + accountId + '/import-resume/' + jobId, { method: 'POST' });
+        if (data.job_id) _startJobPolling(data.job_id);
+    } catch(e) {
+        statusEl.innerHTML = `<span style="color:#f87171">Erreur: ${esc(e.message)}</span>`;
+    }
+}
+
+async function loadImportJobs() {
+    const container = document.getElementById('import-jobs-list');
+    if (!container) return;
+    try {
+        const jobs = await api('/accounts/import-jobs');
+        if (!jobs || jobs.length === 0) { container.innerHTML = ''; return; }
+        let html = '<h4 style="color:#94a3b8;margin-bottom:0.5rem;font-size:0.85rem">Historique des imports</h4>';
+        for (const job of jobs.slice(0, 10)) {
+            const p = job.progress || {};
+            const statusColors = { done: '#4ade80', error: '#f87171', importing: '#fbbf24', interrupted: '#fbbf24', queued: '#64748b', extracting: '#fbbf24' };
+            const statusLabels = { done: 'Termine', error: 'Erreur', importing: 'En cours', interrupted: 'Interrompu', queued: 'En attente', extracting: 'Extraction', uploading: 'Upload' };
+            const color = statusColors[job.status] || '#64748b';
+            const label = statusLabels[job.status] || job.status;
+            html += `<div style="background:#0f172a;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.3rem;font-size:0.8rem;display:flex;justify-content:space-between;align-items:center">` +
+                `<span style="color:#e2e8f0">${esc(job.filename)}</span>` +
+                `<span style="color:${color};font-weight:500">${label}` +
+                `${p.imported ? ' — ' + p.imported + ' imp.' : ''}` +
+                `${p.skipped ? ', ' + p.skipped + ' dup.' : ''}` +
+                `${p.errors ? ', ' + p.errors + ' err.' : ''}` +
+                `</span>` +
+                `<span style="color:#64748b">${job.created_at || ''}</span>` +
+                `</div>`;
+        }
+        container.innerHTML = html;
+    } catch(e) {}
 }
 
 // === Chat ===
@@ -966,9 +2133,19 @@ async function testFromForm(type) {
 let explorerCurrentAccount = null;
 let explorerCurrentFolder = null;
 let explorerCurrentPage = 0;
+let explorerCurrentStorage = 'imap';
 let explorerFoldersCache = [];
 let explorerFoldersTree = [];
+let explorerLocalFoldersCache = [];
 let explorerSeparator = '.';
+
+function folderDisplayName(path) {
+    if (!path) return '';
+    const f = explorerFoldersCache.find(x => x.path === path);
+    if (f) return f.name;
+    const lf = explorerLocalFoldersCache.find(x => x.path === path);
+    return lf ? lf.name : path;
+}
 let currentEmailData = null;
 let currentEmailHtml = '';
 
@@ -976,8 +2153,12 @@ async function loadExplorerAccounts() {
     const sel = document.getElementById('explorer-account');
     const current = sel.value;
     sel.innerHTML = '<option value="">-- Choisir un compte --</option>';
+    const impSel = document.getElementById('import-account');
+    const impCurrent = impSel.value;
+    impSel.innerHTML = '<option value="">-- Compte de destination --</option>';
     for (const a of accountsCache) {
         sel.innerHTML += `<option value="${a.id}" ${a.id == current ? 'selected' : ''}>${esc(a.name)} (${esc(a.imap_user)})</option>`;
+        impSel.innerHTML += `<option value="${a.id}" ${a.id == impCurrent ? 'selected' : ''}>${esc(a.name)} (${esc(a.imap_user)})</option>`;
     }
 }
 
@@ -1002,8 +2183,9 @@ async function loadFolders() {
         statusEl.textContent = '';
         explorerFoldersCache = flattenFolders(data.folders);
         explorerFoldersTree = data.folders;
+        explorerLocalFoldersCache = data.local_folders || [];
         explorerSeparator = data.separator || '.';
-        treeEl.innerHTML = renderFolderTree(data.folders);
+        treeEl.innerHTML = renderFolderTree(data.folders) + renderLocalFoldersSection(explorerLocalFoldersCache);
         document.getElementById('folder-actions').classList.remove('hidden');
         document.getElementById('btn-search-folders').style.display = 'inline-block';
         renderSearchFoldersList();
@@ -1022,25 +2204,67 @@ function flattenFolders(folders, result) {
     return result;
 }
 
+const _priorityFolderMap = { 'inbox': 0, 'boîte de réception': 0, 'brouillons': 1, 'drafts': 1, 'inbox.drafts': 1, 'éléments envoyés': 2, 'sent': 2, 'inbox.sent': 2, 'éléments supprimés': 3, 'trash': 3, 'inbox.trash': 3, 'archive': 4, 'archives': 4 };
+function _folderPriority(name) {
+    const n = name.toLowerCase();
+    return _priorityFolderMap.hasOwnProperty(n) ? _priorityFolderMap[n] : 100;
+}
+function _sortFoldersPriority(folders) {
+    return [...folders].sort((a, b) => _folderPriority(a.name) - _folderPriority(b.name));
+}
+
 function renderFolderTree(folders) {
     let html = '';
-    for (const f of folders) {
+    const sorted = _sortFoldersPriority(folders);
+    for (const f of sorted) {
         const hasChildren = f.children && f.children.length > 0;
         const fid = 'f-' + btoa(unescape(encodeURIComponent(f.path))).replace(/[^a-zA-Z0-9]/g, '');
         const noselect = f.noselect;
         html += '<div>';
         if (noselect) {
-            html += `<div class="folder-item" style="color:#64748b;cursor:default" id="${fid}">`;
+            html += `<div class="folder-item" data-storage="imap" style="color:#64748b;cursor:default" id="${fid}">`;
         } else {
-            html += `<div class="folder-item" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path)" id="${fid}">`;
+            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}">`;
         }
         if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
         else html += '<span class="folder-toggle"></span> ';
-        html += `${esc(f.name)}</div>`;
+        html += `\u{1F4E7} ${esc(f.name)}</div>`;
         if (hasChildren) {
             html += `<div class="folder-children" id="${fid}c" style="display:none">${renderFolderTree(f.children)}</div>`;
         }
         html += '</div>';
+    }
+    return html;
+}
+
+function renderLocalFoldersSection(localFolders) {
+    let html = '<div class="local-folders-header"><span>\u{1F4BE} Dossiers locaux</span>';
+    html += '<button onclick="createLocalFolder()" title="Nouveau dossier local">+</button></div>';
+    if (!localFolders || !localFolders.length) {
+        html += '<p style="color:#475569;font-size:0.75rem;padding:0.2rem 0.4rem">Aucun dossier local</p>';
+        return html;
+    }
+    const tree = _buildLocalTree(localFolders);
+    html += _renderLocalFolderNodes(tree, 0);
+    return html;
+}
+
+function _renderLocalFolderNodes(nodes, depth) {
+    let html = '';
+    for (const f of nodes) {
+        const hasChildren = f.children && f.children.length > 0;
+        const fid = 'lf-' + btoa(unescape(encodeURIComponent(f.path))).replace(/[^a-zA-Z0-9]/g, '');
+        const indent = depth * 16;
+        html += `<div class="folder-item" data-storage="local" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'local')" id="${fid}" style="padding-left:${indent + 4}px">`;
+        if (hasChildren) {
+            html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span>`;
+        } else {
+            html += '<span class="folder-toggle"></span>';
+        }
+        html += ` \u{1F4BE} ${esc(f.name)}</div>`;
+        if (hasChildren) {
+            html += `<div id="${fid}c" style="display:none">${_renderLocalFolderNodes(f.children, depth + 1)}</div>`;
+        }
     }
     return html;
 }
@@ -1054,10 +2278,12 @@ function toggleFolder(childrenId) {
     if (toggle) toggle.innerHTML = visible ? '&#9654;' : '&#9660;';
 }
 
-async function selectFolder(path) {
+async function selectFolder(path, storage) {
+    storage = storage || 'imap';
+    explorerCurrentStorage = storage;
     document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.folder-item').forEach(el => {
-        if (el.dataset.path === path) el.classList.add('active');
+        if (el.dataset.path === path && el.dataset.storage === storage) el.classList.add('active');
     });
     explorerCurrentFolder = path;
     explorerCurrentPage = 0;
@@ -1066,6 +2292,7 @@ async function selectFolder(path) {
     document.getElementById('explorer-search-clear').style.display = 'none';
     closeReadingPane();
     setCookie('mailia_folder', path);
+    setCookie('mailia_storage', storage);
     // Show delete button (hide for INBOX)
     const delBtn = document.getElementById('btn-delete-folder');
     delBtn.style.display = (path && path.toUpperCase() !== 'INBOX') ? 'block' : 'none';
@@ -1076,15 +2303,170 @@ let explorerSearchQuery = '';
 
 function updateActionBar() {
     const hasEmail = !!currentEmailData;
-    ['bar-reply','bar-reply-all','bar-forward','bar-read','bar-flag','bar-move','bar-delete'].forEach(id => {
+    ['bar-reply','bar-reply-all','bar-forward','bar-read','bar-flag','bar-pin','bar-move','bar-delete'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = !hasEmail;
     });
+    const readBtn = document.getElementById('bar-read');
+    const flagBtn = document.getElementById('bar-flag');
+    const pinBtn = document.getElementById('bar-pin');
+    if (!hasEmail) {
+        [readBtn, flagBtn, pinBtn].forEach(b => { if (b) b.classList.remove('active-on'); });
+        return;
+    }
+    // Read: unread = ON (bold in list), read = OFF
+    if (readBtn) {
+        const isUnread = !currentEmailData.seen;
+        readBtn.innerHTML = currentEmailData.seen ? '&#9898;' : '&#9899;';
+        readBtn.title = currentEmailData.seen ? 'Marquer non lu' : 'Marquer lu';
+        readBtn.classList.toggle('active-on', isUnread);
+    }
+    // Flag: flagged = ON
+    if (flagBtn) {
+        flagBtn.classList.toggle('active-on', !!currentEmailData.flagged);
+    }
+    // Pin: pinned = ON
+    if (pinBtn) {
+        const isPinned = _getPinnedUids().has(String(currentEmailData.uid));
+        pinBtn.classList.toggle('active-on', isPinned);
+    }
+}
+
+// Pin management (localStorage based)
+function _getPinnedKey() { return 'mailia_pinned_' + explorerCurrentAccount + '_' + explorerCurrentFolder; }
+function _getPinnedUids() { try { return new Set(JSON.parse(localStorage.getItem(_getPinnedKey()) || '[]')); } catch { return new Set(); } }
+function _savePinnedUids(set) { localStorage.setItem(_getPinnedKey(), JSON.stringify([...set])); }
+
+async function togglePinStatus() {
+    if (!currentEmailData) return;
+    const uid = String(currentEmailData.uid);
+    const pinned = _getPinnedUids();
+    const wasPinned = pinned.has(uid);
+    if (wasPinned) pinned.delete(uid); else pinned.add(uid);
+    _savePinnedUids(pinned);
+    // Update DOM without reload
+    const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
+    if (row) {
+        row.dataset.pinned = String(!wasPinned);
+        row.classList.toggle('pinned', !wasPinned);
+        const iconsEl = row.querySelector('.mail-icons');
+        const pin = iconsEl.querySelector('.icon-pin');
+        if (wasPinned && pin) pin.remove();
+        else if (!wasPinned) iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-pin" title="Epingle">&#9737;</span>');
+        // Move row to correct position
+        const msgEl = document.getElementById('explorer-messages');
+        if (!wasPinned) {
+            // Pin: move to top (after other pinned)
+            const lastPinned = [...msgEl.querySelectorAll('.mail-row.pinned')].pop();
+            if (lastPinned && lastPinned !== row) lastPinned.after(row);
+            else msgEl.prepend(row);
+        } else {
+            // Unpin: move after all pinned rows, maintain date order
+            const pinnedRows = msgEl.querySelectorAll('.mail-row.pinned');
+            const insertAfter = pinnedRows.length ? pinnedRows[pinnedRows.length - 1] : null;
+            if (insertAfter) insertAfter.after(row);
+        }
+    }
+    updateActionBar();
+}
+
+// Multi-selection
+function onRowCheckChange() {
+    const checked = document.querySelectorAll('.mail-row-cb:checked');
+    const bulkBar = document.getElementById('bulk-actions-bar');
+    const headerCb = document.getElementById('header-select-all');
+    const allCbs = document.querySelectorAll('.mail-row-cb');
+    if (checked.length > 0) {
+        bulkBar.classList.remove('hidden');
+        document.getElementById('bulk-count').textContent = checked.length + ' selectionne(s)';
+        document.getElementById('select-all-cb').checked = checked.length === allCbs.length;
+        if (headerCb) headerCb.checked = checked.length === allCbs.length;
+    } else {
+        bulkBar.classList.add('hidden');
+        if (headerCb) headerCb.checked = false;
+    }
+}
+
+function toggleSelectAll(checked) {
+    document.querySelectorAll('.mail-row-cb').forEach(cb => cb.checked = checked);
+    document.getElementById('header-select-all').checked = checked;
+    document.getElementById('select-all-cb').checked = checked;
+    onRowCheckChange();
+}
+
+function clearSelection() {
+    document.querySelectorAll('.mail-row-cb').forEach(cb => cb.checked = false);
+    const headerCb = document.getElementById('header-select-all');
+    if (headerCb) headerCb.checked = false;
+    const selectAllCb = document.getElementById('select-all-cb');
+    if (selectAllCb) selectAllCb.checked = false;
+    const bulkBar = document.getElementById('bulk-actions-bar');
+    if (bulkBar) bulkBar.classList.add('hidden');
+}
+
+function _getSelectedUids() {
+    return [...document.querySelectorAll('.mail-row-cb:checked')].map(cb => cb.dataset.uid);
+}
+
+async function bulkToggleRead() {
+    const uids = _getSelectedUids();
+    if (!uids.length) return;
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+    for (const uid of uids) {
+        const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
+        const isSeen = row ? row.dataset.seen === 'true' : true;
+        const action = isSeen ? 'remove' : 'add';
+        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'seen', action }) }); } catch {}
+    }
+    await loadMessages();
+}
+
+async function bulkToggleFlag() {
+    const uids = _getSelectedUids();
+    if (!uids.length) return;
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+    for (const uid of uids) {
+        const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
+        const isFlagged = row ? row.dataset.flagged === 'true' : false;
+        const action = isFlagged ? 'remove' : 'add';
+        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'flagged', action }) }); } catch {}
+    }
+    await loadMessages();
+}
+
+function bulkTogglePin() {
+    const uids = _getSelectedUids();
+    if (!uids.length) return;
+    const pinned = _getPinnedUids();
+    const allPinned = uids.every(u => pinned.has(u));
+    for (const uid of uids) { if (allPinned) pinned.delete(uid); else pinned.add(uid); }
+    _savePinnedUids(pinned);
+    loadMessages();
+}
+
+function bulkMove(event) {
+    // Reuse existing move dialog with bulk context
+    _bulkMoveUids = _getSelectedUids();
+    if (_bulkMoveUids.length) showMoveDialog(event);
+}
+let _bulkMoveUids = null;
+
+async function bulkDelete() {
+    const uids = _getSelectedUids();
+    if (!uids.length) return;
+    if (!confirm('Supprimer ' + uids.length + ' email(s) ?')) return;
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+    for (const uid of uids) {
+        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}?${params}`, { method: 'DELETE' }); } catch {}
+    }
+    clearSelection();
+    await loadMessages();
 }
 
 async function searchInFolder() {
     const q = document.getElementById('explorer-search').value.trim();
     if (!q) return;
+    if (globalSearchMode) { doGlobalSearch(); return; }
     explorerSearchQuery = q;
     explorerCurrentPage = 0;
     document.getElementById('explorer-search-clear').style.display = 'inline-block';
@@ -1117,9 +2499,9 @@ async function searchMultiFolders(q, folders) {
             multiSearchResults = data.messages;
             msgEl.innerHTML = data.messages.map(m => {
                 let icons = '';
-                if (m.flagged) icons += '<span class="icon-flag" title="Important">&#9733;</span>';
+                if (m.flagged) icons += '<span class="icon-flag" title="Important">!</span>';
                 if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
-                const folderBadge = `<span style="background:#334155;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;color:#64748b;margin-left:0.3rem">${esc(m.folder)}</span>`;
+                const folderBadge = `<span style="background:#334155;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;color:#64748b;margin-left:0.3rem">${esc(m.folder_display || folderDisplayName(m.folder))}</span>`;
                 return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmailFromSearch('${m.uid}', '${escAttr(m.folder)}', this)" data-uid="${m.uid}" data-folder="${escAttr(m.folder)}" data-seen="${m.seen}" data-flagged="${m.flagged}">
                     <div class="mail-icons">${icons}</div>
                     <div class="mail-from">${esc(m.from)}</div>
@@ -1152,6 +2534,7 @@ function clearExplorerSearch() {
     explorerCurrentPage = 0;
     multiSearchResults = null;
     document.getElementById('explorer-search-clear').style.display = 'none';
+    if (globalSearchMode) toggleGlobalSearch();
     loadMessages();
 }
 
@@ -1241,10 +2624,17 @@ async function loadMessages(page) {
 
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Chargement...</p>';
-    document.getElementById('explorer-folder-name').textContent = folder;
+    document.getElementById('explorer-folder-name').textContent = folderDisplayName(folder);
+    _mailSortCol = 'date'; _mailSortAsc = false;
+    document.querySelectorAll('.mail-header-col').forEach(h => {
+        const isDate = h.dataset.sort === 'date';
+        h.classList.toggle('sorted', isDate);
+        const a = h.querySelector('.sort-arrow');
+        if (a) a.textContent = isDate ? '\u25BC' : '';
+    });
 
     try {
-        const params = new URLSearchParams({ folder, page: explorerCurrentPage, size: 50 });
+        const params = new URLSearchParams({ folder, page: explorerCurrentPage, size: 50, storage: explorerCurrentStorage });
         if (explorerSearchQuery) params.set('q', explorerSearchQuery);
         const data = await api(`/accounts/${accountId}/messages?${params}`);
         const label = explorerSearchQuery ? `${data.total} resultats` : `${data.total} messages`;
@@ -1253,26 +2643,55 @@ async function loadMessages(page) {
         if (!data.messages.length) {
             msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Dossier vide</p>';
         } else {
-            msgEl.innerHTML = data.messages.map(m => {
+            // Sort by date desc (newest first) by default
+            data.messages.sort((a, b) => {
+                const da = a.date || '', db = b.date || '';
+                return db.localeCompare(da);
+            });
+            const pinned = _getPinnedUids();
+            const pinnedMsgs = data.messages.filter(m => pinned.has(String(m.uid)));
+            const normalMsgs = data.messages.filter(m => !pinned.has(String(m.uid)));
+            const sorted = [...pinnedMsgs, ...normalMsgs];
+            msgEl.innerHTML = sorted.map(m => {
                 let icons = '';
-                if (m.flagged) icons += '<span class="icon-flag" title="Important">&#9733;</span>';
+                const isPinned = pinned.has(String(m.uid));
+                if (isPinned) icons += '<span class="icon-pin" title="Epingle">&#9737;</span>';
+                if (m.flagged) icons += '<span class="icon-flag" title="Important">!</span>';
                 if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
-                return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}">
+                const flagPrefix = m.flagged ? '<span style="color:#ef4444;font-weight:bold" title="Important">! </span>' : '';
+                return `<div class="mail-row ${m.seen ? '' : 'unread'} ${isPinned ? 'pinned' : ''}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}" data-pinned="${isPinned}" style="grid-template-columns:20px auto 1fr 2fr auto">
+                    <input type="checkbox" class="mail-row-cb" onclick="event.stopPropagation();onRowCheckChange()" data-uid="${m.uid}">
                     <div class="mail-icons">${icons}</div>
                     <div class="mail-from">${esc(m.from)}</div>
-                    <div class="mail-subject">${esc(m.subject) || '<em style="color:#64748b">(sans sujet)</em>'}</div>
+                    <div class="mail-subject">${flagPrefix}${esc(m.subject) || '<em style="color:#64748b">(sans sujet)</em>'}</div>
                     <div class="mail-date">${esc(m.date)}</div>
                 </div>`;
             }).join('');
         }
+        clearSelection();
 
         const totalPages = Math.ceil(data.total / data.size);
         const pagerEl = document.getElementById('explorer-pager');
         if (totalPages > 1) {
-            let ph = '';
-            if (explorerCurrentPage > 0) ph += `<button class="btn-sm" onclick="loadMessages(${explorerCurrentPage - 1})">Precedent</button>`;
-            ph += `<span style="color:#94a3b8;padding:0.4rem">Page ${explorerCurrentPage + 1} / ${totalPages}</span>`;
-            if (explorerCurrentPage < totalPages - 1) ph += `<button class="btn-sm" onclick="loadMessages(${explorerCurrentPage + 1})">Suivant</button>`;
+            const cp = explorerCurrentPage;
+            let ph = `<button class="pager-btn" onclick="loadMessages(0)" ${cp === 0 ? 'disabled' : ''}>&laquo;</button>`;
+            ph += `<button class="pager-btn" onclick="loadMessages(${cp - 1})" ${cp === 0 ? 'disabled' : ''}>&lsaquo;</button>`;
+            const pages = [];
+            pages.push(0);
+            let start = Math.max(1, cp - 2), end = Math.min(totalPages - 2, cp + 2);
+            if (cp < 4) end = Math.min(totalPages - 2, 4);
+            if (cp > totalPages - 5) start = Math.max(1, totalPages - 5);
+            if (start > 1) pages.push(-1);
+            for (let i = start; i <= end; i++) pages.push(i);
+            if (end < totalPages - 2) pages.push(-1);
+            if (totalPages > 1) pages.push(totalPages - 1);
+            const uniquePages = [...new Set(pages)];
+            for (const p of uniquePages) {
+                if (p === -1) { ph += '<span class="pager-ellipsis">...</span>'; }
+                else { ph += `<button class="pager-btn ${p === cp ? 'active' : ''}" onclick="loadMessages(${p})">${p + 1}</button>`; }
+            }
+            ph += `<button class="pager-btn" onclick="loadMessages(${cp + 1})" ${cp >= totalPages - 1 ? 'disabled' : ''}>&rsaquo;</button>`;
+            ph += `<button class="pager-btn" onclick="loadMessages(${totalPages - 1})" ${cp >= totalPages - 1 ? 'disabled' : ''}>&raquo;</button>`;
             pagerEl.innerHTML = ph;
         } else pagerEl.innerHTML = '';
     } catch(e) {
@@ -1281,6 +2700,7 @@ async function loadMessages(page) {
 }
 
 async function openEmail(uid, rowEl) {
+    if (_loadSettings().readingMode === 'pane') { openEmailInPane(uid, rowEl); return; }
     const overlay = document.getElementById('reading-overlay');
     overlay.classList.remove('hidden');
     document.getElementById('email-body').style.display = 'none';
@@ -1303,7 +2723,7 @@ async function openEmail(uid, rowEl) {
     if (rowEl) rowEl.classList.add('selected');
 
     try {
-        const params = new URLSearchParams({ folder: explorerCurrentFolder });
+        const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
         const data = await api(`/accounts/${explorerCurrentAccount}/message/${uid}?${params}`);
         currentEmailData = data;
         updateActionBar();
@@ -1370,6 +2790,156 @@ function closeReadingPane() {
     updateActionBar();
 }
 
+async function openEmailInPane(uid, rowEl) {
+    const pane = document.getElementById('preview-pane');
+    pane.classList.remove('hidden');
+    document.getElementById('pane-resize-handle').classList.remove('hidden');
+    document.getElementById('explorer-messages').style.maxHeight = '30vh';
+    document.getElementById('preview-subject').textContent = 'Chargement...';
+    document.getElementById('preview-from').textContent = '';
+    document.getElementById('preview-date').textContent = '';
+    document.getElementById('preview-to').style.display = 'none';
+    document.getElementById('preview-body-html').style.display = 'none';
+    document.getElementById('preview-body-html').srcdoc = '';
+    document.getElementById('preview-body').style.display = 'none';
+    document.getElementById('preview-attachments').style.display = 'none';
+    currentEmailHtml = '';
+    document.querySelectorAll('.mail-row').forEach(r => r.classList.remove('selected'));
+    if (rowEl) rowEl.classList.add('selected');
+    try {
+        const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+        const data = await api(`/accounts/${explorerCurrentAccount}/message/${uid}?${params}`);
+        currentEmailData = data;
+        updateActionBar();
+        document.getElementById('preview-subject').textContent = data.subject || '(sans sujet)';
+        document.getElementById('preview-from').textContent = data.from;
+        document.getElementById('preview-date').textContent = data.date;
+        if (data.to) { document.getElementById('preview-to').textContent = 'A: ' + data.to; document.getElementById('preview-to').style.display = 'block'; }
+        if (data.attachments && data.attachments.length) {
+            const attEl = document.getElementById('preview-attachments');
+            attEl.style.display = 'block';
+            attEl.innerHTML = data.attachments.map((a, idx) =>
+                `<a href="#" onclick="event.preventDefault();downloadAttachment(${idx})" style="background:#334155;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.75rem;color:#38bdf8;margin-right:0.2rem;text-decoration:none">${esc(a.filename)}</a>`
+            ).join('');
+        }
+        if (data.body_html) {
+            currentEmailHtml = data.body_html;
+            const iframe = document.getElementById('preview-body-html');
+            iframe.style.display = 'block';
+            iframe.srcdoc = data.body_html;
+        } else {
+            document.getElementById('preview-body').style.display = 'block';
+            document.getElementById('preview-body').textContent = data.body_text || '(pas de contenu)';
+        }
+        if (!data.seen && rowEl) { rowEl.classList.remove('unread'); rowEl.dataset.seen = 'true'; }
+        document.getElementById('btn-read-toggle').textContent = data.seen ? 'Non lu' : 'Lu';
+        document.getElementById('btn-flag-toggle').textContent = data.flagged ? 'Retirer important' : 'Important';
+    } catch(e) {
+        document.getElementById('preview-body').style.display = 'block';
+        document.getElementById('preview-body').textContent = 'Erreur: ' + e.message;
+    }
+}
+
+function closePreviewPane() {
+    const pane = document.getElementById('preview-pane');
+    pane.classList.remove('preview-fullscreen');
+    pane.classList.add('hidden');
+    document.getElementById('pane-resize-handle').classList.add('hidden');
+    document.getElementById('explorer-messages').style.maxHeight = '70vh';
+    document.querySelectorAll('.mail-row').forEach(r => r.classList.remove('selected'));
+    currentEmailData = null;
+    updateActionBar();
+}
+
+function togglePreviewFullscreen() {
+    const pane = document.getElementById('preview-pane');
+    const isFs = pane.classList.contains('preview-fullscreen');
+    pane.classList.toggle('preview-fullscreen');
+    const btn = document.getElementById('btn-preview-fullscreen');
+    if (!isFs) {
+        btn.innerHTML = '&#x2750;';
+        btn.title = 'Quitter plein ecran';
+    } else {
+        btn.innerHTML = '&#x26F6;';
+        btn.title = 'Plein ecran';
+        pane.style.maxHeight = '40vh';
+        pane.style.height = '';
+    }
+}
+
+// Sort & filter for mail list
+let _mailSortCol = null, _mailSortAsc = true;
+function sortMailColumn(col) {
+    if (_mailSortCol === col) _mailSortAsc = !_mailSortAsc;
+    else { _mailSortCol = col; _mailSortAsc = true; }
+    document.querySelectorAll('.mail-header-col').forEach(h => {
+        h.classList.toggle('sorted', h.dataset.sort === col);
+        const arrow = h.querySelector('.sort-arrow');
+        if (arrow) arrow.textContent = h.dataset.sort === col ? (_mailSortAsc ? '\u25B2' : '\u25BC') : '';
+    });
+    const msgEl = document.getElementById('explorer-messages');
+    const rows = [...msgEl.querySelectorAll('.mail-row')];
+    rows.sort((a, b) => {
+        let va = '', vb = '';
+        if (col === 'from') { va = a.querySelector('.mail-from')?.textContent || ''; vb = b.querySelector('.mail-from')?.textContent || ''; }
+        else if (col === 'subject') { va = a.querySelector('.mail-subject')?.textContent || ''; vb = b.querySelector('.mail-subject')?.textContent || ''; }
+        else if (col === 'date') { va = a.querySelector('.mail-date')?.textContent || ''; vb = b.querySelector('.mail-date')?.textContent || ''; }
+        const cmp = va.localeCompare(vb, undefined, { sensitivity: 'base' });
+        return _mailSortAsc ? cmp : -cmp;
+    });
+    rows.forEach(r => msgEl.appendChild(r));
+}
+
+let _filterTimer = null;
+function filterMailRows() {
+    clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => {
+        const ff = (document.getElementById('filter-from')?.value || '').trim();
+        const fs = (document.getElementById('filter-subject')?.value || '').trim();
+        const fd = (document.getElementById('filter-date')?.value || '').trim();
+        const parts = [];
+        if (ff) parts.push('from:' + ff);
+        if (fs) parts.push('subject:' + fs);
+        if (fd) parts.push(fd);
+        const q = parts.join(' ');
+        if (q !== (explorerSearchQuery || '')) {
+            explorerSearchQuery = q || '';
+            explorerCurrentPage = 0;
+            loadMessages(0);
+        }
+    }, 500);
+}
+
+// Resize handle for split pane
+(function setupPaneResize() {
+    const handle = document.getElementById('pane-resize-handle');
+    if (!handle) return;
+    let startY, startMsgH, startPaneH;
+    handle.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        handle.classList.add('dragging');
+        const msgEl = document.getElementById('explorer-messages');
+        const pane = document.getElementById('preview-pane');
+        startY = e.clientY;
+        startMsgH = msgEl.offsetHeight;
+        startPaneH = pane.offsetHeight;
+        function onMove(ev) {
+            const dy = ev.clientY - startY;
+            const newMsgH = Math.max(80, startMsgH + dy);
+            const newPaneH = Math.max(80, startPaneH - dy);
+            msgEl.style.maxHeight = newMsgH + 'px';
+            pane.style.maxHeight = newPaneH + 'px';
+        }
+        function onUp() {
+            handle.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+})();
+
 function toggleHtmlView() {
     const iframe = document.getElementById('email-body-html');
     const btn = document.getElementById('btn-html-toggle');
@@ -1384,7 +2954,7 @@ function toggleHtmlView() {
 
 async function downloadAttachment(index) {
     if (!currentEmailData) return;
-    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
     const url = `/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}/attachment/${index}?${params}`;
     const resp = await apiRaw(url);
     if (!resp.ok) { alert('Erreur de telechargement'); return; }
@@ -1406,7 +2976,7 @@ async function toggleReadStatus() {
     const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
     const isSeen = row ? row.dataset.seen === 'true' : currentEmailData.seen;
     const action = isSeen ? 'remove' : 'add';
-    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
     try {
         await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, {
             method: 'POST', body: JSON.stringify({ flag: 'seen', action })
@@ -1414,6 +2984,7 @@ async function toggleReadStatus() {
         if (row) { row.dataset.seen = String(!isSeen); if (isSeen) row.classList.add('unread'); else row.classList.remove('unread'); }
         document.getElementById('btn-read-toggle').textContent = isSeen ? 'Lu' : 'Non lu';
         currentEmailData.seen = !isSeen;
+        updateActionBar();
     } catch(e) { alert('Erreur: ' + e.message); }
 }
 
@@ -1423,7 +2994,7 @@ async function toggleFlagStatus() {
     const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
     const isFlagged = row ? row.dataset.flagged === 'true' : currentEmailData.flagged;
     const action = isFlagged ? 'remove' : 'add';
-    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
     try {
         await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, {
             method: 'POST', body: JSON.stringify({ flag: 'flagged', action })
@@ -1432,17 +3003,25 @@ async function toggleFlagStatus() {
             row.dataset.flagged = String(!isFlagged);
             const iconsEl = row.querySelector('.mail-icons');
             const star = iconsEl.querySelector('.icon-flag');
-            if (isFlagged && star) star.remove();
-            else if (!isFlagged) iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-flag" title="Important">&#9733;</span>');
+            const subjectEl = row.querySelector('.mail-subject');
+            if (isFlagged) {
+                if (star) star.remove();
+                const excl = subjectEl.querySelector('span[title="Important"]');
+                if (excl) excl.remove();
+            } else {
+                iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-flag" title="Important">!</span>');
+                subjectEl.insertAdjacentHTML('afterbegin', '<span style="color:#ef4444;font-weight:bold" title="Important">! </span>');
+            }
         }
         document.getElementById('btn-flag-toggle').textContent = isFlagged ? 'Important' : 'Retirer important';
         currentEmailData.flagged = !isFlagged;
+        updateActionBar();
     } catch(e) { alert('Erreur: ' + e.message); }
 }
 
 async function deleteCurrentEmail() {
     if (!currentEmailData || !confirm('Supprimer cet email ?')) return;
-    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
     try {
         await api(`/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}?${params}`, { method: 'DELETE' });
         closeReadingPane();
@@ -1455,16 +3034,40 @@ function showMoveDialog(evt) {
     const popup = document.createElement('div');
     popup.className = 'popup-menu';
     popup.id = 'active-popup';
-    popup.style.top = Math.min(evt.clientY + 5, window.innerHeight - 320) + 'px';
-    popup.style.left = Math.min(evt.clientX - 80, window.innerWidth - 220) + 'px';
+    popup.style.maxHeight = '400px';
+    popup.style.overflowY = 'auto';
+    popup.style.top = Math.min(evt.clientY + 5, window.innerHeight - 400) + 'px';
+    popup.style.left = Math.min(evt.clientX - 80, window.innerWidth - 250) + 'px';
+    popup.style.minWidth = '220px';
     let html = '<div class="popup-menu-title">Deplacer vers:</div>';
-    for (const f of explorerFoldersCache) {
-        if (f.path === explorerCurrentFolder) continue;
-        html += `<div class="popup-item" data-path="${escAttr(f.path)}" onclick="moveToFolder(this.dataset.path)">${esc(f.path)}</div>`;
+    html += '<div style="color:#38bdf8;font-size:0.7rem;padding:0.2rem 0.6rem;border-bottom:1px solid #334155;font-weight:600">\u{1F4E7} IMAP</div>';
+    html += _renderMoveTree(explorerFoldersTree || [], 'imap', 0);
+    if (explorerLocalFoldersCache.length) {
+        html += '<div style="color:#a78bfa;font-size:0.7rem;padding:0.2rem 0.6rem;border-bottom:1px solid #334155;margin-top:0.3rem;font-weight:600">\u{1F4BE} Local</div>';
+        for (const f of explorerLocalFoldersCache) {
+            if (f.path === explorerCurrentFolder && explorerCurrentStorage === 'local') continue;
+            html += `<div class="popup-item" onclick="moveToFolder('${escAttr(f.path)}', 'local')" style="padding-left:12px">\u{1F4BE} ${esc(f.name)}</div>`;
+        }
     }
     popup.innerHTML = html;
     document.body.appendChild(popup);
     setTimeout(() => document.addEventListener('click', closePopupHandler), 10);
+}
+
+function _renderMoveTree(folders, storage, depth) {
+    let html = '';
+    for (const f of folders) {
+        if (f.path === explorerCurrentFolder && explorerCurrentStorage === storage) continue;
+        const indent = depth * 12 + 8;
+        const hasChildren = f.children && f.children.length > 0;
+        if (!f.noselect) {
+            html += `<div class="popup-item" onclick="moveToFolder('${escAttr(f.path)}', '${storage}')" style="padding-left:${indent}px">${esc(f.name)}</div>`;
+        }
+        if (hasChildren) {
+            html += _renderMoveTree(f.children, storage, depth + 1);
+        }
+    }
+    return html;
 }
 
 function closePopup() {
@@ -1477,13 +3080,14 @@ function closePopupHandler(e) {
     if (p && !p.contains(e.target)) closePopup();
 }
 
-async function moveToFolder(targetFolder) {
+async function moveToFolder(targetFolder, targetStorage) {
     if (!currentEmailData) return;
     closePopup();
-    const params = new URLSearchParams({ folder: explorerCurrentFolder });
+    targetStorage = targetStorage || 'imap';
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
     try {
         await api(`/accounts/${explorerCurrentAccount}/message/${currentEmailData.uid}/move?${params}`, {
-            method: 'POST', body: JSON.stringify({ target_folder: targetFolder })
+            method: 'POST', body: JSON.stringify({ target_folder: targetFolder, target_storage: targetStorage })
         });
         closeReadingPane();
         await loadMessages();
@@ -1522,8 +3126,10 @@ function openCompose(prefill) {
     document.getElementById('compose-delivery-receipt').checked = false;
     document.getElementById('compose-status').textContent = '';
     document.getElementById('compose-send-btn').disabled = false;
-    if (prefill.cc) document.getElementById('compose-cc-bcc').classList.remove('hidden');
-    else document.getElementById('compose-cc-bcc').classList.add('hidden');
+    if (prefill.cc) document.getElementById('compose-extras').classList.remove('hidden');
+    else document.getElementById('compose-extras').classList.add('hidden');
+    const extToggle = document.getElementById('compose-extras-toggle');
+    if (extToggle) extToggle.innerHTML = prefill.cc ? '&#9652; Moins' : '&#9662; Plus';
 
     composeAttachments = [];
     document.getElementById('compose-attachments-list').innerHTML = '';
@@ -1539,14 +3145,19 @@ function openCompose(prefill) {
     const initialContent = prefill.body_html || (prefill.body ? '<pre>' + esc(prefill.body) + '</pre>' : '');
     tinymce.init({
         selector: '#compose-editor',
+        base_url: '/static/tinymce',
+        suffix: '.min',
         skin: 'oxide-dark',
         content_css: 'dark',
         height: '100%',
         menubar: false,
         statusbar: false,
-        plugins: 'lists link image table code',
-        toolbar: 'undo redo | bold italic underline strikethrough | forecolor backcolor | bullist numlist | link image table | alignleft aligncenter alignright | code',
-        content_style: 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: #e2e8f0; background: #0f172a; }',
+        promotion: false,
+        branding: false,
+        license_key: 'gpl',
+        plugins: 'lists link image table code searchreplace fullscreen',
+        toolbar: 'undo redo | bold italic underline strikethrough | forecolor backcolor | bullist numlist | link image table | alignleft aligncenter alignright | searchreplace | code fullscreen',
+        content_style: 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: #1e293b; background: ' + (_loadSettings().emailBg || '#ffffff') + '; }',
         setup: function(editor) {
             editor.on('init', function() {
                 editor.setContent(initialContent);
@@ -1559,6 +3170,13 @@ function openCompose(prefill) {
     if (!prefill.to) setTimeout(() => document.getElementById('compose-to').focus(), 100);
 }
 
+function toggleComposeExtras() {
+    const el = document.getElementById('compose-extras');
+    const toggle = document.getElementById('compose-extras-toggle');
+    el.classList.toggle('hidden');
+    toggle.innerHTML = el.classList.contains('hidden') ? '&#9662; Plus' : '&#9652; Moins';
+}
+
 function closeCompose() {
     tinymce.remove('#compose-editor');
     document.getElementById('compose-overlay').classList.add('hidden');
@@ -1568,6 +3186,8 @@ function closeCompose() {
 function replyEmail() {
     if (!currentEmailData) return;
     const d = currentEmailData;
+    const wasFullscreen = document.getElementById('preview-pane')?.classList.contains('preview-fullscreen');
+    if (wasFullscreen) closePreviewPane();
     const replyTo = d.reply_to || d.from;
     const subject = d.subject.startsWith('Re:') ? d.subject : 'Re: ' + d.subject;
     const quoteHeader = `<br><br><div style="border-left:2px solid #38bdf8;padding-left:0.75rem;color:#94a3b8">
@@ -1582,6 +3202,10 @@ function replyEmail() {
         in_reply_to: d.message_id,
         references: (d.references ? d.references + ' ' : '') + d.message_id,
     });
+    if (wasFullscreen) {
+        const panel = document.querySelector('#compose-overlay .modal-panel');
+        if (panel) { panel.classList.add('modal-fullscreen'); const btn = panel.querySelector('.modal-fullscreen-btn'); if (btn) { btn.textContent = '\u2750'; btn.title = 'Restaurer'; } }
+    }
 }
 
 function replyAllEmail() {
@@ -1611,6 +3235,8 @@ function replyAllEmail() {
 function forwardEmail() {
     if (!currentEmailData) return;
     const d = currentEmailData;
+    const wasFullscreen = document.getElementById('preview-pane')?.classList.contains('preview-fullscreen');
+    if (wasFullscreen) closePreviewPane();
     const subject = d.subject.startsWith('Fwd:') ? d.subject : 'Fwd: ' + d.subject;
     const fwdHtml = `<br><br><div style="border-left:2px solid #94a3b8;padding-left:0.75rem;color:#94a3b8">
         <p><strong>--- Message transfere ---</strong><br>
@@ -1618,6 +3244,10 @@ function forwardEmail() {
         ${d.body_html || '<pre>' + esc(d.body_text || '') + '</pre>'}
     </div>`;
     openCompose({ title: 'Transferer', subject, body_html: fwdHtml });
+    if (wasFullscreen) {
+        const panel = document.querySelector('#compose-overlay .modal-panel');
+        if (panel) { panel.classList.add('modal-fullscreen'); const btn = panel.querySelector('.modal-fullscreen-btn'); if (btn) { btn.textContent = '\u2750'; btn.title = 'Restaurer'; } }
+    }
 }
 
 function handleFileSelect() {
@@ -1644,6 +3274,24 @@ function renderComposeAttachments() {
 }
 
 function removeAttachment(i) { composeAttachments.splice(i, 1); renderComposeAttachments(); }
+
+function handleDroppedFiles(files) {
+    for (const file of files) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            composeAttachments.push({ filename: file.name, data_base64: e.target.result.split(',')[1], size: file.size });
+            renderComposeAttachments();
+        };
+        reader.readAsDataURL(file);
+    }
+}
+(function setupComposeDragDrop() {
+    const body = document.querySelector('#compose-overlay .modal-body');
+    if (!body) return;
+    body.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('drag-over'); });
+    body.addEventListener('dragleave', function(e) { e.preventDefault(); this.classList.remove('drag-over'); });
+    body.addEventListener('drop', function(e) { e.preventDefault(); this.classList.remove('drag-over'); if (e.dataTransfer.files.length) handleDroppedFiles(e.dataTransfer.files); });
+})();
 
 async function sendComposedEmail() {
     const accountId = document.getElementById('compose-from').value;
@@ -2083,9 +3731,24 @@ async function promptCreateFolder() {
     }
 }
 
+async function createLocalFolder() {
+    if (!explorerCurrentAccount) { alert('Selectionnez un compte.'); return; }
+    const name = prompt('Nom du dossier local :');
+    if (!name || !name.trim()) return;
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/local-folders`, {
+            method: 'POST',
+            body: JSON.stringify({ name: name.trim() }),
+        });
+        await loadFolders();
+    } catch(e) {
+        alert('Erreur: ' + e.message);
+    }
+}
+
 async function promptDeleteFolder() {
     if (!explorerCurrentAccount || !explorerCurrentFolder) return;
-    if (!confirm(`Supprimer le dossier "${explorerCurrentFolder}" ?\n\nCette action est irreversible.`)) return;
+    if (!confirm(`Supprimer le dossier "${folderDisplayName(explorerCurrentFolder)}" ?\n\nCette action est irreversible.`)) return;
     try {
         await api(`/accounts/${explorerCurrentAccount}/delete-folder`, {
             method: 'POST',
@@ -2120,6 +3783,10 @@ function isTyping() {
 }
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
+        const settings = document.getElementById('settings-overlay');
+        if (settings && !settings.classList.contains('hidden')) { closeSettings(); return; }
+        const previewPane = document.getElementById('preview-pane');
+        if (previewPane && previewPane.classList.contains('preview-fullscreen')) { togglePreviewFullscreen(); return; }
         const compose = document.getElementById('compose-overlay');
         if (!compose.classList.contains('hidden')) { closeCompose(); return; }
         const reading = document.getElementById('reading-overlay');

@@ -12,6 +12,7 @@ services:
     env_file: .env
     volumes:
       - attachments_data:/data/attachments
+      - import_data:/data/imports
       - ./rules:/data/rules:ro
     depends_on:
       postgres:
@@ -136,6 +137,7 @@ volumes:
   postgres_data:
   elastic_data:
   attachments_data:
+  import_data:
 
 networks:
   mailia-net:

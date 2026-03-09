@@ -28,6 +28,15 @@ app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")
 
 
+@app.on_event("startup")
+async def startup_event():
+    try:
+        from src.import_jobs import resume_interrupted_jobs
+        resume_interrupted_jobs()
+    except Exception:
+        pass
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}

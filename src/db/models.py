@@ -1,6 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, SmallInteger
+    Column, Integer, String, Boolean, DateTime, Text, LargeBinary,
+    ForeignKey, JSON, SmallInteger, UniqueConstraint, func
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -113,3 +114,37 @@ class ProcessingLog(Base):
     action_detail = Column(JSON, nullable=True)
     ai_response = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class LocalFolder(Base):
+    __tablename__ = "local_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("mail_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    path = Column(String(500), nullable=False)
+    parent_path = Column(String(500), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("account_id", "path"),)
+
+
+class LocalEmail(Base):
+    __tablename__ = "local_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    folder_id = Column(Integer, ForeignKey("local_folders.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id_header = Column(String(500), index=True)
+    from_addr = Column(String(500))
+    to_addr = Column(String(500))
+    cc_addr = Column(String(500))
+    subject = Column(String(1000))
+    date = Column(DateTime, index=True)
+    seen = Column(Boolean, default=True)
+    flagged = Column(Boolean, default=False)
+    answered = Column(Boolean, default=False)
+    has_attachments = Column(Boolean, default=False)
+    body_text = Column(Text)
+    body_html = Column(Text)
+    raw_message = Column(LargeBinary)
+    created_at = Column(DateTime, server_default=func.now())
