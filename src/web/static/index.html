@@ -493,9 +493,9 @@
         .explorer-right { min-height: 0; }
         /* Toolbar */
         .explorer-toolbar { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
-        .toolbar-icon { padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; min-width: 1.8rem; text-align: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
-        .toolbar-icon.icon-flag { font-weight: 900; font-size: 1rem; }
-        .toolbar-icon.icon-pin-btn { font-size: 1rem; }
+        .toolbar-icon { width: 2rem; height: 2rem; padding: 0; font-size: 0.9rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+        .toolbar-icon.icon-flag { font-weight: 900; }
+        .toolbar-icon svg { pointer-events: none; }
         .toolbar-icon.active-on { background: #38bdf8; color: #fff !important; border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.3); }
         .toolbar-sep { width: 1px; height: 1.2rem; background: #334155; flex-shrink: 0; margin: 0 0.1rem; }
         .btn-danger-icon { border-color: #ef4444; color: #ef4444; }
@@ -504,7 +504,7 @@
         .mail-row-cb { width: 14px; height: 14px; cursor: pointer; accent-color: #38bdf8; flex-shrink: 0; }
         .mail-header-cb { width: 14px; height: 14px; cursor: pointer; accent-color: #38bdf8; }
         /* Pin icon */
-        .icon-pin { color: #38bdf8; font-size: 0.7rem; }
+        .icon-pin { color: #38bdf8; display: inline-block; vertical-align: middle; }
         .mail-row.pinned { background: rgba(56,189,248,0.05); }
         /* Bulk selection bar */
         .bulk-bar { display: flex; gap: 0.3rem; align-items: center; padding: 0.3rem 0.75rem; background: #1e3a5f; border-radius: 4px; margin-bottom: 0.3rem; font-size: 0.8rem; color: #38bdf8; }
@@ -769,7 +769,7 @@
                 <select id="explorer-account" class="input-field" onchange="loadFolders()" style="min-width:180px;padding:0.3rem 0.5rem;font-size:0.8rem">
                     <option value="">-- Compte --</option>
                 </select>
-                <button class="btn-sm toolbar-icon" onclick="openCompose()" title="Nouveau message (N)" style="font-size:1.1rem;font-weight:700">+</button>
+                <button class="btn-sm toolbar-icon" onclick="openCompose()" title="Nouveau message (N)" style="font-weight:700">+</button>
                 <span class="toolbar-sep"></span>
                 <button class="btn-sm toolbar-icon" onclick="replyEmail()" id="bar-reply" disabled title="Repondre (R)">&#8617;</button>
                 <button class="btn-sm toolbar-icon" onclick="replyAllEmail()" id="bar-reply-all" disabled title="Repondre a tous">&#8617;&#8617;</button>
@@ -777,7 +777,7 @@
                 <span class="toolbar-sep"></span>
                 <button class="btn-sm toolbar-icon" onclick="toggleReadStatus()" id="bar-read" disabled title="Lu/Non lu">&#9898;</button>
                 <button class="btn-sm toolbar-icon icon-flag" onclick="toggleFlagStatus()" id="bar-flag" disabled title="Important">!</button>
-                <button class="btn-sm toolbar-icon icon-pin-btn" onclick="togglePinStatus()" id="bar-pin" disabled title="Epingler">&#9737;</button>
+                <button class="btn-sm toolbar-icon" onclick="togglePinStatus()" id="bar-pin" disabled title="Epingler"><svg width="16" height="16" viewBox="5 1 14 22" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></button>
                 <button class="btn-sm toolbar-icon" onclick="showMoveDialog(event)" id="bar-move" disabled title="Deplacer">&#8631;</button>
                 <button class="btn-sm toolbar-icon" onclick="deleteCurrentEmail()" id="bar-delete" disabled title="Supprimer">&#10005;</button>
                 <span class="toolbar-sep"></span>
@@ -832,7 +832,7 @@
                         <span id="bulk-count">0 selectionne(s)</span>
                         <button onclick="bulkToggleRead()" title="Lu/Non lu">&#9898; Lu</button>
                         <button onclick="bulkToggleFlag()" title="Important">! Important</button>
-                        <button onclick="bulkTogglePin()" title="Epingler">&#9737; Pin</button>
+                        <button onclick="bulkTogglePin()" title="Epingler"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg> Pin</button>
                         <button onclick="bulkMove(event)" title="Deplacer">&#8631; Deplacer</button>
                         <button onclick="bulkDelete()" title="Supprimer">&#10005; Supprimer</button>
                         <button onclick="clearSelection()" title="Annuler">&times;</button>
@@ -2361,7 +2361,7 @@ async function togglePinStatus() {
         const iconsEl = row.querySelector('.mail-icons');
         const pin = iconsEl.querySelector('.icon-pin');
         if (wasPinned && pin) pin.remove();
-        else if (!wasPinned) iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-pin" title="Epingle">&#9737;</span>');
+        else if (!wasPinned) iconsEl.insertAdjacentHTML('afterbegin', '<span class="icon-pin" title="Epingle"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></span>');
         // Move row to correct position
         const msgEl = document.getElementById('explorer-messages');
         if (!wasPinned) {
@@ -2664,7 +2664,7 @@ async function loadMessages(page) {
             msgEl.innerHTML = sorted.map(m => {
                 let icons = '';
                 const isPinned = pinned.has(String(m.uid));
-                if (isPinned) icons += '<span class="icon-pin" title="Epingle">&#9737;</span>';
+                if (isPinned) icons += '<span class="icon-pin" title="Epingle"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></span>';
                 if (m.flagged) icons += '<span class="icon-flag" title="Important">!</span>';
                 if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
                 const flagPrefix = m.flagged ? '<span style="color:#ef4444;font-weight:bold" title="Important">! </span>' : '';
