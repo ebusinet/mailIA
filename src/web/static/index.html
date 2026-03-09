@@ -485,6 +485,11 @@
         .pane-resize-handle:hover, .pane-resize-handle.dragging { background: #334155; }
         .pane-resize-handle::after { content: ''; width: 40px; height: 3px; border-radius: 2px; background: #475569; }
         .pane-resize-handle:hover::after { background: #38bdf8; }
+        /* Explorer full-height layout */
+        #tab-explorer { display: flex; flex-direction: column; height: calc(100vh - 5.5rem); }
+        #tab-explorer > .explorer-toolbar { flex-shrink: 0; }
+        .explorer-main { flex: 1; min-height: 0; }
+        .explorer-right { min-height: 0; }
         /* Toolbar */
         .explorer-toolbar { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
         .toolbar-icon { padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; min-width: 1.8rem; text-align: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
@@ -802,9 +807,9 @@
                 </div>
                 <div id="search-folders-list" style="max-height:200px;overflow-y:auto"></div>
             </div>
-            <div style="display:flex;gap:1rem;min-height:500px">
+            <div class="explorer-main" style="display:flex;gap:1rem">
                 <div style="min-width:220px;max-width:300px;display:flex;flex-direction:column;gap:0.5rem">
-                    <div id="explorer-tree" style="background:#1e293b;border-radius:8px;padding:0.75rem;overflow-y:auto;flex:1;max-height:65vh">
+                    <div id="explorer-tree" style="background:#1e293b;border-radius:8px;padding:0.75rem;overflow-y:auto;flex:1">
                         <p style="color:#64748b;font-size:0.85rem">Selectionnez un compte</p>
                     </div>
                     <div id="folder-actions" class="hidden" style="display:flex;gap:0.3rem">
@@ -812,7 +817,7 @@
                         <button class="btn-danger" onclick="promptDeleteFolder()" id="btn-delete-folder" style="font-size:0.8rem;display:none">Supprimer</button>
                     </div>
                 </div>
-                <div style="flex:1;display:flex;flex-direction:column">
+                <div class="explorer-right" style="flex:1;display:flex;flex-direction:column">
                     <div id="explorer-folder-header" style="margin-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center">
                         <span id="explorer-folder-name" style="color:#38bdf8;font-weight:600"></span>
                         <div style="display:flex;align-items:center;gap:0.5rem">
@@ -846,10 +851,10 @@
                             <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-date">
                         </div>
                     </div>
-                    <div id="explorer-messages" style="flex:1;overflow-y:auto;max-height:70vh"></div>
+                    <div id="explorer-messages" style="flex:1;overflow-y:auto;min-height:0"></div>
                     <div id="explorer-pager" style="display:flex;gap:0.4rem;margin-top:0.5rem;justify-content:center;align-items:center;flex-wrap:wrap"></div>
                     <div id="pane-resize-handle" class="pane-resize-handle hidden"></div>
-                    <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;overflow-y:auto;max-height:40vh;margin-top:0">
+                    <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;overflow-y:auto;margin-top:0;flex-shrink:0">
                         <div class="preview-header">
                             <div style="flex:1;min-width:0;overflow:hidden">
                                 <div id="preview-subject" style="font-weight:600;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.9rem"></div>
@@ -1253,7 +1258,7 @@ function _applySettings() {
     }
     if (s.readingMode === 'modal') {
         const pp = document.getElementById('preview-pane');
-        if (pp && !pp.classList.contains('hidden')) { pp.classList.remove('preview-fullscreen'); pp.classList.add('hidden'); document.getElementById('pane-resize-handle')?.classList.add('hidden'); document.getElementById('explorer-messages').style.maxHeight = '70vh'; }
+        if (pp && !pp.classList.contains('hidden')) { pp.classList.remove('preview-fullscreen'); pp.classList.add('hidden'); document.getElementById('pane-resize-handle')?.classList.add('hidden'); document.getElementById('explorer-messages').style.flex = '1'; }
     }
 }
 function setTheme(theme) { const s = _loadSettings(); s.theme = theme; _saveSettings(s); _applySettings(); }
@@ -2794,7 +2799,8 @@ async function openEmailInPane(uid, rowEl) {
     const pane = document.getElementById('preview-pane');
     pane.classList.remove('hidden');
     document.getElementById('pane-resize-handle').classList.remove('hidden');
-    document.getElementById('explorer-messages').style.maxHeight = '30vh';
+    document.getElementById('explorer-messages').style.flex = '0 0 30%';
+    document.getElementById('preview-pane').style.height = '';
     document.getElementById('preview-subject').textContent = 'Chargement...';
     document.getElementById('preview-from').textContent = '';
     document.getElementById('preview-date').textContent = '';
@@ -2845,7 +2851,7 @@ function closePreviewPane() {
     pane.classList.remove('preview-fullscreen');
     pane.classList.add('hidden');
     document.getElementById('pane-resize-handle').classList.add('hidden');
-    document.getElementById('explorer-messages').style.maxHeight = '70vh';
+    document.getElementById('explorer-messages').style.flex = '1';
     document.querySelectorAll('.mail-row').forEach(r => r.classList.remove('selected'));
     currentEmailData = null;
     updateActionBar();
@@ -2862,7 +2868,6 @@ function togglePreviewFullscreen() {
     } else {
         btn.innerHTML = '&#x26F6;';
         btn.title = 'Plein ecran';
-        pane.style.maxHeight = '40vh';
         pane.style.height = '';
     }
 }
@@ -2927,8 +2932,8 @@ function filterMailRows() {
             const dy = ev.clientY - startY;
             const newMsgH = Math.max(80, startMsgH + dy);
             const newPaneH = Math.max(80, startPaneH - dy);
-            msgEl.style.maxHeight = newMsgH + 'px';
-            pane.style.maxHeight = newPaneH + 'px';
+            msgEl.style.flex = '0 0 ' + newMsgH + 'px';
+            pane.style.height = newPaneH + 'px';
         }
         function onUp() {
             handle.classList.remove('dragging');
