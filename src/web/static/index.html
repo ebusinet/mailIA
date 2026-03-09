@@ -2634,6 +2634,8 @@ async function loadMessages(page) {
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Chargement...</p>';
     document.getElementById('explorer-folder-name').textContent = folderDisplayName(folder);
+    ['filter-from','filter-subject','filter-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    document.getElementById('explorer-pager').style.display = '';
     _mailSortCol = 'date'; _mailSortAsc = false;
     document.querySelectorAll('.mail-header-col').forEach(h => {
         const isDate = h.dataset.sort === 'date';
@@ -2899,24 +2901,29 @@ function sortMailColumn(col) {
     rows.forEach(r => msgEl.appendChild(r));
 }
 
-let _filterTimer = null;
 function filterMailRows() {
-    clearTimeout(_filterTimer);
-    _filterTimer = setTimeout(() => {
-        const ff = (document.getElementById('filter-from')?.value || '').trim();
-        const fs = (document.getElementById('filter-subject')?.value || '').trim();
-        const fd = (document.getElementById('filter-date')?.value || '').trim();
-        const parts = [];
-        if (ff) parts.push('from:' + ff);
-        if (fs) parts.push('subject:' + fs);
-        if (fd) parts.push(fd);
-        const q = parts.join(' ');
-        if (q !== (explorerSearchQuery || '')) {
-            explorerSearchQuery = q || '';
-            explorerCurrentPage = 0;
-            loadMessages(0);
-        }
-    }, 500);
+    const ff = (document.getElementById('filter-from')?.value || '').trim().toLowerCase();
+    const fs = (document.getElementById('filter-subject')?.value || '').trim().toLowerCase();
+    const fd = (document.getElementById('filter-date')?.value || '').trim().toLowerCase();
+    const hasFilter = !!(ff || fs || fd);
+    const rows = document.querySelectorAll('#explorer-messages .mail-row');
+    let visible = 0;
+    rows.forEach(row => {
+        const from = (row.querySelector('.mail-from')?.textContent || '').toLowerCase();
+        const subject = (row.querySelector('.mail-subject')?.textContent || '').toLowerCase();
+        const date = (row.querySelector('.mail-date')?.textContent || '').toLowerCase();
+        const match = (!ff || from.includes(ff)) && (!fs || subject.includes(fs)) && (!fd || date.includes(fd));
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+    });
+    const pagerEl = document.getElementById('explorer-pager');
+    const countEl = document.getElementById('explorer-folder-count');
+    if (hasFilter) {
+        pagerEl.style.display = 'none';
+        countEl.textContent = visible + ' / ' + rows.length + ' messages';
+    } else {
+        pagerEl.style.display = '';
+    }
 }
 
 // Resize handle for split pane
