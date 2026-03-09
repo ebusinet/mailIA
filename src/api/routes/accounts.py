@@ -315,16 +315,31 @@ async def list_folders(
     try:
         with IMAPManager(config) as imap:
             raw_folders = imap.list_folders()
+            conn = imap._conn
+            # Get message count per folder via STATUS
+            folder_counts = {}
+            for f in raw_folders:
+                fname = f["name"]
+                try:
+                    st, sdata = conn.status(_imap_quote(fname), "(MESSAGES)")
+                    if st == "OK" and sdata:
+                        import re as _re
+                        m = _re.search(r'MESSAGES\s+(\d+)', sdata[0].decode())
+                        if m:
+                            folder_counts[fname] = int(m.group(1))
+                except Exception:
+                    pass
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP connection failed: {e}")
 
     separator = raw_folders[0]["separator"] if raw_folders else "."
     tree = _build_folder_tree(raw_folders)
 
-    # Add storage tag to IMAP folder nodes
+    # Add storage tag and message count to IMAP folder nodes
     def _tag_imap(nodes):
         for n in nodes:
             n["storage"] = "imap"
+            n["count"] = folder_counts.get(n.get("path", ""), 0)
             if n.get("children"):
                 _tag_imap(n["children"])
     _tag_imap(tree)
@@ -536,20 +551,56 @@ async def list_messages(
                 except UnicodeEncodeError:
                     charset = 'UTF-8'
                 status, data = conn.uid("SEARCH", charset, criteria)
+                search_uids = set(data[0].decode().split()) if data[0] else set()
             else:
-                status, data = conn.uid("SEARCH", None, "ALL")
-            all_uids = data[0].decode().split() if data[0] else []
-            # Sort UIDs numerically — IMAP doesn't guarantee order
-            all_uids.sort(key=lambda x: int(x))
-            total = len(all_uids)
+                search_uids = None  # means "all"
 
-            if not q.strip() and exists_count and total != exists_count:
-                logger.warning("UID SEARCH ALL returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
+            # Fetch all UIDs + INTERNALDATE for date-based pagination
+            status, data = conn.uid("FETCH", "1:*", "(UID INTERNALDATE)")
+            uid_dates = []
+            if status == "OK" and data:
+                for item in data:
+                    if isinstance(item, tuple) and len(item) == 2:
+                        meta = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                    elif isinstance(item, bytes):
+                        meta = item.decode(errors="replace")
+                    else:
+                        continue
+                    uid_match = re.search(r'UID (\d+)', meta)
+                    date_match = re.search(r'INTERNALDATE "([^"]+)"', meta)
+                    if uid_match and date_match:
+                        uid = uid_match.group(1)
+                        if search_uids is not None and uid not in search_uids:
+                            continue
+                        idate = date_match.group(1)
+                        uid_dates.append((uid, idate))
 
-            start = max(0, total - (page + 1) * size)
-            end = total - page * size
-            page_uids = all_uids[start:end]
-            page_uids.reverse()
+            # Sort by INTERNALDATE descending (newest first)
+            from email.utils import parsedate_to_datetime as _pdt
+            from datetime import datetime as _dt
+            def _parse_idate(s):
+                try:
+                    return _pdt(s)
+                except Exception:
+                    pass
+                try:
+                    # INTERNALDATE format: "09-Mar-2026 17:24:42 +0100"
+                    return _dt.strptime(s.strip(), "%d-%b-%Y %H:%M:%S %z")
+                except Exception:
+                    return _dt.min.replace(tzinfo=None)
+
+            uid_dates.sort(key=lambda x: _parse_idate(x[1]), reverse=True)
+            total = len(uid_dates)
+
+            if not q and exists_count and total != exists_count:
+                logger.warning("FETCH returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
+
+            # Paginate the date-sorted list
+            page_start = page * size
+            page_entries = uid_dates[page_start:page_start + size]
+            page_uids = [e[0] for e in page_entries]
+            # Build a map of UID -> INTERNALDATE for display
+            idate_map = {e[0]: e[1] for e in page_entries}
 
             messages = []
             if page_uids:
@@ -575,13 +626,16 @@ async def list_messages(
                             msg = email_mod.message_from_bytes(header_bytes)
                             from_addr = _decode_header(msg.get("From", ""))
                             subject = _decode_header(msg.get("Subject", ""))
-                            date_raw = msg.get("Date", "")
+
+                            # Use INTERNALDATE for display (matches webmail order)
                             date_str = ""
-                            try:
-                                dt = email.utils.parsedate_to_datetime(date_raw)
-                                date_str = dt.strftime("%Y-%m-%d %H:%M")
-                            except Exception:
-                                date_str = date_raw
+                            idate_raw = idate_map.get(uid, "")
+                            if idate_raw:
+                                try:
+                                    idt = _parse_idate(idate_raw)
+                                    date_str = idt.strftime("%Y-%m-%d %H:%M")
+                                except Exception:
+                                    date_str = idate_raw
 
                             seen = "\\Seen" in flags_str
                             flagged = "\\Flagged" in flags_str
@@ -597,6 +651,10 @@ async def list_messages(
                                 "answered": answered,
                             })
                         i += 1
+
+            # Re-sort messages to match the INTERNALDATE order
+            uid_order = {uid: idx for idx, uid in enumerate(page_uids)}
+            messages.sort(key=lambda m: uid_order.get(m["uid"], 999))
 
     except HTTPException:
         raise

@@ -2237,7 +2237,8 @@ function renderFolderTree(folders) {
         }
         if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
         else html += '<span class="folder-toggle"></span> ';
-        html += `\u{1F4E7} ${esc(f.name)}</div>`;
+        const countBadge = f.count ? ` <span style="color:#64748b;font-size:0.75rem">(${f.count})</span>` : '';
+        html += `\u{1F4E7} ${esc(f.name)}${countBadge}</div>`;
         if (hasChildren) {
             html += `<div class="folder-children" id="${fid}c" style="display:none">${renderFolderTree(f.children)}</div>`;
         }
@@ -2654,11 +2655,7 @@ async function loadMessages(page) {
         if (!data.messages.length) {
             msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Dossier vide</p>';
         } else {
-            // Sort by date desc (newest first) by default
-            data.messages.sort((a, b) => {
-                const da = a.date || '', db = b.date || '';
-                return db.localeCompare(da);
-            });
+            // Server returns messages sorted by INTERNALDATE desc
             const pinned = _getPinnedUids();
             const pinnedMsgs = data.messages.filter(m => pinned.has(String(m.uid)));
             const normalMsgs = data.messages.filter(m => !pinned.has(String(m.uid)));
