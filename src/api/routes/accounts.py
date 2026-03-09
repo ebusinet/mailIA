@@ -506,7 +506,14 @@ async def list_messages(
     try:
         with IMAPManager(config) as imap:
             conn = imap._conn
-            status, _ = _select_folder(conn, folder, readonly=True)
+            status, select_data = _select_folder(conn, folder, readonly=True)
+
+            # Get EXISTS count from SELECT response for validation
+            exists_count = 0
+            try:
+                exists_count = int(select_data[0])
+            except (IndexError, ValueError, TypeError):
+                pass
 
             if q.strip():
                 # Parse structured search: from:xxx subject:xxx or plain text
@@ -532,7 +539,12 @@ async def list_messages(
             else:
                 status, data = conn.uid("SEARCH", None, "ALL")
             all_uids = data[0].decode().split() if data[0] else []
+            # Sort UIDs numerically — IMAP doesn't guarantee order
+            all_uids.sort(key=lambda x: int(x))
             total = len(all_uids)
+
+            if not q.strip() and exists_count and total != exists_count:
+                logger.warning("UID SEARCH ALL returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
 
             start = max(0, total - (page + 1) * size)
             end = total - page * size
@@ -541,7 +553,7 @@ async def list_messages(
 
             messages = []
             if page_uids:
-                uid_range = ",".join(page_uids[-100:])
+                uid_range = ",".join(page_uids)
                 status, data = conn.uid("FETCH", uid_range, "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
                 if status == "OK" and data:
                     i = 0
