@@ -852,10 +852,10 @@
                         </div>
                     </div>
                     <div id="explorer-messages" style="flex:1;overflow-y:auto;min-height:0"></div>
-                    <div id="explorer-pager" style="display:flex;gap:0.4rem;margin-top:0.5rem;justify-content:center;align-items:center;flex-wrap:wrap"></div>
+                    <div id="explorer-pager" style="display:flex;gap:0.4rem;margin-top:0.5rem;justify-content:center;align-items:center;flex-wrap:wrap;flex-shrink:0"></div>
                     <div id="pane-resize-handle" class="pane-resize-handle hidden"></div>
-                    <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;overflow-y:auto;margin-top:0;flex-shrink:0">
-                        <div class="preview-header">
+                    <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;margin-top:0;display:flex;flex-direction:column;min-height:0;flex:1">
+                        <div class="preview-header" style="flex-shrink:0">
                             <div style="flex:1;min-width:0;overflow:hidden">
                                 <div id="preview-subject" style="font-weight:600;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.9rem"></div>
                                 <div style="font-size:0.75rem;margin-top:0.1rem;display:flex;gap:0.5rem;align-items:center"><span id="preview-from" style="color:#38bdf8"></span><span id="preview-date" style="color:#64748b"></span></div>
@@ -867,10 +867,10 @@
                                 <button class="btn-sm toolbar-icon" onclick="closePreviewPane()" style="font-size:0.7rem;padding:0.15rem 0.35rem">&times;</button>
                             </div>
                         </div>
-                        <div id="preview-to" style="padding:0.1rem 0.75rem;font-size:0.75rem;color:#94a3b8;display:none"></div>
-                        <div id="preview-attachments" style="padding:0.1rem 0.75rem;display:none"></div>
-                        <iframe id="preview-body-html" style="display:none;width:100%;border:none;background:var(--email-bg);height:300px" sandbox="allow-same-origin"></iframe>
-                        <div id="preview-body" style="display:none;padding:0.75rem;color:#cbd5e1;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-word"></div>
+                        <div id="preview-to" style="padding:0.1rem 0.75rem;font-size:0.75rem;color:#94a3b8;display:none;flex-shrink:0"></div>
+                        <div id="preview-attachments" style="padding:0.1rem 0.75rem;display:none;flex-shrink:0"></div>
+                        <iframe id="preview-body-html" style="display:none;width:100%;border:none;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-same-origin"></iframe>
+                        <div id="preview-body" style="display:none;padding:0.75rem;color:#cbd5e1;font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;flex:1;min-height:0;overflow-y:auto"></div>
                     </div>
                 </div>
             </div>
@@ -2800,7 +2800,7 @@ async function openEmailInPane(uid, rowEl) {
     pane.classList.remove('hidden');
     document.getElementById('pane-resize-handle').classList.remove('hidden');
     document.getElementById('explorer-messages').style.flex = '0 0 30%';
-    document.getElementById('preview-pane').style.height = '';
+    document.getElementById('preview-pane').style.flex = '1';
     document.getElementById('preview-subject').textContent = 'Chargement...';
     document.getElementById('preview-from').textContent = '';
     document.getElementById('preview-date').textContent = '';
@@ -2868,7 +2868,7 @@ function togglePreviewFullscreen() {
     } else {
         btn.innerHTML = '&#x26F6;';
         btn.title = 'Plein ecran';
-        pane.style.height = '';
+        pane.style.flex = '1';
     }
 }
 
@@ -2931,9 +2931,8 @@ function filterMailRows() {
         function onMove(ev) {
             const dy = ev.clientY - startY;
             const newMsgH = Math.max(80, startMsgH + dy);
-            const newPaneH = Math.max(80, startPaneH - dy);
             msgEl.style.flex = '0 0 ' + newMsgH + 'px';
-            pane.style.height = newPaneH + 'px';
+            pane.style.flex = '1';
         }
         function onUp() {
             handle.classList.remove('dragging');
