@@ -493,7 +493,7 @@
         .explorer-right { min-height: 0; }
         /* Toolbar */
         .explorer-toolbar { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
-        .toolbar-icon { width: 2rem; height: 2rem; padding: 0; font-size: 0.9rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+        .btn-sm.toolbar-icon { width: 2rem; height: 2rem; padding: 0; font-size: 0.9rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
         .toolbar-icon.icon-flag { font-weight: 900; }
         .toolbar-icon svg { pointer-events: none; }
         .toolbar-icon.active-on { background: #38bdf8; color: #fff !important; border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.3); }
@@ -777,8 +777,8 @@
                 <span class="toolbar-sep"></span>
                 <button class="btn-sm toolbar-icon" onclick="toggleReadStatus()" id="bar-read" disabled title="Lu/Non lu">&#9675;</button>
                 <button class="btn-sm toolbar-icon icon-flag" onclick="toggleFlagStatus()" id="bar-flag" disabled title="Important">!</button>
-                <button class="btn-sm toolbar-icon" onclick="togglePinStatus()" id="bar-pin" disabled title="Epingler"><svg width="18" height="18" viewBox="5 1 14 22" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></button>
-                <button class="btn-sm toolbar-icon" onclick="showMoveDialog(event)" id="bar-move" disabled title="Deplacer"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></button>
+                <button class="btn-sm toolbar-icon" onclick="togglePinStatus()" id="bar-pin" disabled title="Epingler"><svg width="26" height="26" viewBox="5 1 14 22" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></button>
+                <button class="btn-sm toolbar-icon" onclick="showMoveDialog(event)" id="bar-move" disabled title="Deplacer"><svg width="24" height="24" viewBox="1 3 22 17" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></button>
                 <button class="btn-sm toolbar-icon" onclick="deleteCurrentEmail()" id="bar-delete" disabled title="Supprimer">&#10005;</button>
                 <span class="toolbar-sep"></span>
                 <input type="text" id="explorer-search" placeholder="Rechercher..." class="input-field" style="flex:1;min-width:120px;padding:0.3rem 0.5rem;font-size:0.8rem" onkeydown="if(event.key==='Enter')searchInFolder()">
