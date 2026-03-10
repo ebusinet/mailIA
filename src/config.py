@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # AI defaults
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    mcp_sse_url: str = ""  # e.g. https://mailia.expert-presta.com/mcp/sse
 
     # App
     app_url: str = "https://mailia.expert-presta.com"

@@ -1,8 +1,9 @@
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import auth, accounts, search, rules, ai, admin, websocket
+from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts
 from src.config import get_settings
 
 settings = get_settings()
@@ -23,6 +24,7 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")
@@ -35,6 +37,11 @@ async def startup_event():
         resume_interrupted_jobs()
     except Exception:
         pass
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/static/index.html")
 
 
 @app.get("/api/health")

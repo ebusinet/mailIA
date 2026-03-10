@@ -7,6 +7,7 @@ Or:        fastmcp run src/mcp/server.py
 import json
 import logging
 import smtplib
+import ssl as ssl_mod
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -24,6 +25,10 @@ logger = logging.getLogger("mcp-mailia")
 # User ID is configured at startup via env var MCP_USER_ID
 USER_ID: int = 0
 
+import os as _os
+
+_mcp_prefix = _os.environ.get("MCP_PATH_PREFIX", "")
+
 mcp = FastMCP(
     name="MailIA",
     instructions=(
@@ -31,6 +36,8 @@ mcp = FastMCP(
         "apply AI rules, send emails via SMTP. All operations are scoped to the "
         "authenticated user."
     ),
+    sse_path=f"{_mcp_prefix}/sse",
+    message_path=f"{_mcp_prefix}/messages/",
 )
 
 
@@ -484,6 +491,17 @@ async def create_folder(
 # SEND EMAILS (SMTP)
 # ---------------------------------------------------------------------------
 
+def _smtp_connect(account):
+    """Connect to SMTP server with proper SSL/STARTTLS handling."""
+    port = account.smtp_port or 465
+    use_implicit_ssl = port == 465 or (account.smtp_ssl and port != 587)
+    if use_implicit_ssl:
+        return smtplib.SMTP_SSL(account.smtp_host, port, timeout=30)
+    else:
+        server = smtplib.SMTP(account.smtp_host, port, timeout=30)
+        server.starttls(context=ssl_mod.create_default_context())
+        return server
+
 @mcp.tool(tags={"send"})
 async def send_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
@@ -516,11 +534,7 @@ async def send_email(
     smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
 
     try:
-        if account.smtp_ssl:
-            server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port)
-        else:
-            server = smtplib.SMTP(account.smtp_host, account.smtp_port)
-            server.starttls()
+        server = _smtp_connect(account)
         server.login(account.smtp_user or account.imap_user, smtp_password)
         recipients = to + cc + bcc
         server.sendmail(msg["From"], recipients, msg.as_string())
@@ -580,11 +594,7 @@ async def reply_to_email(
 
         smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
 
-        if account.smtp_ssl:
-            server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port)
-        else:
-            server = smtplib.SMTP(account.smtp_host, account.smtp_port)
-            server.starttls()
+        server = _smtp_connect(account)
         server.login(account.smtp_user or account.imap_user, smtp_password)
         server.sendmail(msg["From"], to_addrs, msg.as_string())
         server.quit()
@@ -637,11 +647,7 @@ async def forward_email(
 
         smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
 
-        if account.smtp_ssl:
-            server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port)
-        else:
-            server = smtplib.SMTP(account.smtp_host, account.smtp_port)
-            server.starttls()
+        server = _smtp_connect(account)
         server.login(account.smtp_user or account.imap_user, smtp_password)
         server.sendmail(msg["From"], to, msg.as_string())
         server.quit()
@@ -1719,8 +1725,17 @@ def main():
         print("ERROR: Set MCP_USER_ID environment variable", file=sys.stderr)
         sys.exit(1)
 
-    logger.info(f"MailIA MCP server starting for user_id={USER_ID}")
-    mcp.run(transport="stdio")
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    port = int(os.environ.get("MCP_PORT", "8200"))
+    host = os.environ.get("MCP_HOST", "0.0.0.0")
+
+    logger.info(f"MailIA MCP server starting for user_id={USER_ID} transport={transport}")
+
+    if transport == "sse":
+        import asyncio
+        asyncio.run(mcp.run_sse_async(host=host, port=port))
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

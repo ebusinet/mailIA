@@ -87,7 +87,13 @@ def _build_provider(config: AIProvider, user_id: int) -> LLMProvider:
         return ClaudeProvider(api_key=api_key, default_model=config.model)
 
     if ptype == "openai":
-        return OpenAIProvider(api_key=api_key, default_model=config.model)
+        mcp_servers = None
+        if config.endpoint:
+            settings = get_settings()
+            if settings.mcp_sse_url:
+                mcp_servers = {"mailia": {"type": "sse", "url": settings.mcp_sse_url}}
+        return OpenAIProvider(api_key=api_key, default_model=config.model,
+                              base_url=config.endpoint, mcp_servers=mcp_servers)
 
     raise ValueError(f"Unknown provider type: {ptype}")
 

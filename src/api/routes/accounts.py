@@ -2046,7 +2046,10 @@ def _decode_header(raw: str) -> str:
     decoded = []
     for part, charset in parts:
         if isinstance(part, bytes):
-            decoded.append(part.decode(charset or "utf-8", errors="replace"))
+            try:
+                decoded.append(part.decode(charset or "utf-8", errors="replace"))
+            except (UnicodeDecodeError, LookupError):
+                decoded.append(part.decode("utf-8", errors="replace"))
         else:
             decoded.append(part)
     return " ".join(decoded)

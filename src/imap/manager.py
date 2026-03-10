@@ -130,7 +130,12 @@ class IMAPManager:
                 filename = part.get_filename() or "unnamed"
                 attachment_names.append(filename)
             elif content_type == "text/plain" and not body_text:
-                payload = part.get_payload(decode=True)
+                try:
+                    payload = part.get_payload(decode=True)
+                except Exception:
+                    payload = part.get_payload(decode=False)
+                    if isinstance(payload, str):
+                        payload = payload.encode("utf-8", errors="replace")
                 if payload:
                     charset = part.get_content_charset() or "utf-8"
                     try:
@@ -350,7 +355,12 @@ class IMAPManager:
             disposition = str(part.get("Content-Disposition", ""))
             if "attachment" in disposition:
                 if idx == attachment_index:
-                    payload = part.get_payload(decode=True)
+                    try:
+                        payload = part.get_payload(decode=True)
+                    except Exception:
+                        payload = part.get_payload(decode=False)
+                        if isinstance(payload, str):
+                            payload = payload.encode("utf-8", errors="replace")
                     filename = part.get_filename() or "unnamed"
                     content_type = part.get_content_type()
                     return {

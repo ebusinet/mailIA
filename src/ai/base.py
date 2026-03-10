@@ -25,6 +25,11 @@ class LLMProvider(ABC):
     async def chat(self, messages: list[AIMessage], model: str | None = None) -> AIResponse:
         """Send a chat completion request."""
 
+    async def stream_chat(self, messages: list[AIMessage], model: str | None = None):
+        """Stream chat response as text chunks. Override for real streaming."""
+        response = await self.chat(messages, model)
+        yield response.content
+
     async def classify(self, text: str, categories: list[str], context: str = "") -> str:
         """Classify text into one of the given categories."""
         cats = ", ".join(categories)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, LargeBinary,
-    ForeignKey, JSON, SmallInteger, UniqueConstraint, func
+    ForeignKey, JSON, SmallInteger, UniqueConstraint, Table, func
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -26,6 +26,8 @@ class User(Base):
     mail_accounts = relationship("MailAccount", back_populates="user", cascade="all, delete-orphan")
     ai_providers = relationship("AIProvider", back_populates="user", cascade="all, delete-orphan")
     ai_rules = relationship("AIRule", back_populates="user", cascade="all, delete-orphan")
+    contacts = relationship("Contact", back_populates="user", cascade="all, delete-orphan")
+    contact_groups = relationship("ContactGroup", back_populates="user", cascade="all, delete-orphan")
 
 
 class MailAccount(Base):
@@ -127,6 +129,45 @@ class LocalFolder(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("account_id", "path"),)
+
+
+contact_group_members = Table(
+    "contact_group_members",
+    Base.metadata,
+    Column("contact_id", Integer, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("contact_groups.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class Contact(Base):
+    __tablename__ = "contacts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
+    emails = Column(JSON, nullable=False, default=list)
+    ai_directives = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="contacts")
+    groups = relationship("ContactGroup", secondary=contact_group_members, back_populates="contacts")
+
+
+class ContactGroup(Base):
+    __tablename__ = "contact_groups"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    ai_directives = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="contact_groups")
+    contacts = relationship("Contact", secondary=contact_group_members, back_populates="groups")
 
 
 class LocalEmail(Base):

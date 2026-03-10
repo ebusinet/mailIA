@@ -60,6 +60,31 @@ services:
     networks:
       - mailia-net
 
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: mailia-mcp
+    restart: unless-stopped
+    command: python -m src.mcp.server
+    env_file: .env
+    environment:
+      - MCP_USER_ID=${MCP_USER_ID:-2}
+      - MCP_TRANSPORT=sse
+      - MCP_PORT=8200
+      - MCP_PATH_PREFIX=/mcp
+    ports:
+      - "127.0.0.1:8200:8200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mailia-net
+
   telegram:
     build:
       context: .
