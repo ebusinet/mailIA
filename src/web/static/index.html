@@ -708,7 +708,13 @@
         body.theme-light .folder-ctx-item:hover { background: #f1f5f9; }
 
         /* Drag & drop */
+        .folder-item.folder-selected { outline: 2px solid #f87171; outline-offset: -2px; background: rgba(248,113,113,0.12) !important; }
         .folder-item.drag-over { outline: 2px dashed #38bdf8; outline-offset: -2px; background: rgba(56,189,248,0.15) !important; }
+        .folder-sel-bar { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.5rem; background: #7f1d1d; border-radius: 6px; font-size: 0.8rem; color: #fca5a5; margin-bottom: 0.4rem; }
+        .folder-sel-bar button { background: #dc2626; color: #fff; border: none; border-radius: 4px; padding: 0.2rem 0.5rem; cursor: pointer; font-size: 0.75rem; }
+        .folder-sel-bar button:hover { background: #b91c1c; }
+        .folder-sel-bar .cancel { background: transparent; border: 1px solid #fca5a5; color: #fca5a5; }
+        .folder-sel-bar .cancel:hover { background: rgba(252,165,165,0.15); }
         .mail-row.dragging { opacity: 0.4; }
 
         /* Email toolbar */
@@ -3038,7 +3044,7 @@ function renderFolderTree(folders) {
         if (noselect) {
             html += `<div class="folder-item" data-storage="imap" style="color:#64748b;cursor:default" id="${fid}" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         } else {
-            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}" draggable="true" ondragstart="_onFolderDragStart(event, this)" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
+            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="_onFolderClick(event, this)" id="${fid}" draggable="true" ondragstart="_onFolderDragStart(event, this)" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         }
         if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
         else html += '<span class="folder-toggle"></span> ';
@@ -3093,6 +3099,71 @@ function toggleFolder(childrenId) {
     if (toggle) toggle.innerHTML = visible ? '&#9654;' : '&#9660;';
 }
 
+// --- Folder multi-select ---
+let _folderSelection = new Set();
+
+function _onFolderClick(e, el) {
+    const path = el.dataset.path;
+    if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (_folderSelection.has(path)) _folderSelection.delete(path);
+        else _folderSelection.add(path);
+        _renderFolderSelection();
+        return;
+    }
+    // Normal click — clear selection and navigate
+    if (_folderSelection.size > 0) { _folderSelection.clear(); _renderFolderSelection(); }
+    selectFolder(path, 'imap');
+}
+function _renderFolderSelection() {
+    document.querySelectorAll('.folder-item[data-storage="imap"]').forEach(el => {
+        el.classList.toggle('folder-selected', _folderSelection.has(el.dataset.path));
+    });
+    _renderFolderSelBar();
+}
+function _renderFolderSelBar() {
+    let bar = document.getElementById('folder-sel-bar');
+    if (_folderSelection.size === 0) { if (bar) bar.remove(); return; }
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'folder-sel-bar';
+        bar.id = 'folder-sel-bar';
+        const tree = document.getElementById('explorer-tree');
+        tree.parentElement.insertBefore(bar, tree);
+    }
+    bar.innerHTML = `<span>${_folderSelection.size} dossier(s)</span>` +
+        `<button onclick="_bulkDeleteFolders()">🗑️ Supprimer</button>` +
+        `<button class="cancel" onclick="_clearFolderSelection()">✕</button>`;
+}
+function _clearFolderSelection() {
+    _folderSelection.clear();
+    _renderFolderSelection();
+}
+async function _bulkDeleteFolders() {
+    const paths = [..._folderSelection];
+    if (!paths.length) return;
+    const msg = `Supprimer ${paths.length} dossier(s) ?\n\n${paths.join('\n')}\n\n⚠️ Tous les emails contenus seront supprimés.`;
+    if (!confirm(msg)) return;
+    const accountId = document.getElementById('explorer-account').value;
+    // Delete deepest first (longest paths) to avoid deleting parents before children
+    paths.sort((a, b) => b.length - a.length);
+    let errors = [];
+    for (const p of paths) {
+        try {
+            await api(`/accounts/${accountId}/delete-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_name: p }) });
+        } catch(e) { errors.push(`${p}: ${e.message}`); }
+    }
+    _folderSelection.clear();
+    if (paths.includes(explorerCurrentFolder)) {
+        document.getElementById('explorer-messages').innerHTML = '';
+        _setFolderName('');
+        explorerCurrentFolder = '';
+    }
+    await loadFolders();
+    if (errors.length) alert('Erreurs:\n' + errors.join('\n'));
+}
+
 // --- Folder context menu ---
 function _onFolderCtx(e, el) {
     e.preventDefault();
@@ -3104,9 +3175,12 @@ function _onFolderCtx(e, el) {
     const menu = document.createElement('div');
     menu.className = 'folder-ctx-menu';
     menu.id = 'folder-ctx-menu';
+    const selCount = _folderSelection.size;
+    const hasSelection = selCount > 0;
     menu.innerHTML = `
         <div class="folder-ctx-item" onclick="_ctxCreateSubfolder('${escAttr(path)}')">📁 Nouveau sous-dossier</div>
         ${path ? `<div class="folder-ctx-item danger" onclick="_ctxDeleteFolder('${escAttr(path)}')">🗑️ Supprimer ce dossier</div>` : ''}
+        ${hasSelection ? `<div class="folder-ctx-item danger" onclick="_bulkDeleteFolders()">🗑️ Supprimer les ${selCount} dossier(s)</div>` : ''}
     `;
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
