@@ -687,8 +687,8 @@
         .mail-row.selected { border-left: 3px solid #38bdf8; background: rgba(56,189,248,0.1); }
         .mail-row .mail-from, .mail-row .mail-subject { font-weight: 400; }
         .mail-row.unread .mail-from, .mail-row.unread .mail-subject { font-weight: 700; }
-        .mail-icons { display: flex; gap: 0.2rem; align-items: center; min-width: 2rem; }
-        .mail-icons span { font-size: 0.75rem; }
+        .mail-icons { display: flex; gap: 0.15rem; align-items: center; min-width: 3.2rem; flex-shrink: 0; }
+        .mail-icons span { font-size: 0.7rem; line-height: 1; }
         .mail-from { color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mail-subject { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mail-date { color: #64748b; white-space: nowrap; text-align: right; }
@@ -3016,7 +3016,7 @@ function renderFolderTree(folders) {
         if (noselect) {
             html += `<div class="folder-item" data-storage="imap" style="color:#64748b;cursor:default" id="${fid}" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         } else {
-            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
+            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}" draggable="true" ondragstart="_onFolderDragStart(event, this)" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         }
         if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
         else html += '<span class="folder-toggle"></span> ';
@@ -3120,21 +3120,33 @@ async function _ctxDeleteFolder(path) {
         if (count > 0) msg += `\n\n⚠️ Ce dossier contient ${count} email(s) qui seront supprimés.`;
         if (!confirm(msg)) return;
         await api(`/accounts/${accountId}/delete-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_name: path }) });
+        // If we deleted the currently viewed folder, clear messages
+        if (explorerCurrentFolder === path) {
+            document.getElementById('explorer-messages').innerHTML = '';
+            document.getElementById('explorer-folder-count').textContent = '';
+            explorerCurrentFolder = '';
+        }
         await loadFolders();
     } catch(e) { alert('Erreur: ' + e.message); }
 }
 
-// --- Drag & drop: emails → folders ---
+// --- Drag & drop: emails → folders AND folders → folders ---
 function _onMailDragStart(e) {
     const row = e.target.closest('.mail-row');
     if (!row) return;
-    // Collect checked UIDs or just this one
     const checked = _getSelectedUids();
     const uids = checked.length > 0 && checked.includes(row.dataset.uid) ? checked : [row.dataset.uid];
-    e.dataTransfer.setData('text/plain', JSON.stringify({ uids, fromFolder: explorerCurrentFolder, storage: explorerCurrentStorage }));
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'emails', uids, fromFolder: explorerCurrentFolder, storage: explorerCurrentStorage }));
     e.dataTransfer.effectAllowed = 'move';
     row.classList.add('dragging');
     setTimeout(() => row.classList.remove('dragging'), 200);
+}
+function _onFolderDragStart(e, folderEl) {
+    e.stopPropagation();
+    const path = folderEl.dataset.path;
+    if (!path) { e.preventDefault(); return; }
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'folder', folderPath: path }));
+    e.dataTransfer.effectAllowed = 'move';
 }
 function _onFolderDragOver(e) {
     e.preventDefault();
@@ -3146,23 +3158,44 @@ function _onFolderDragLeave(e) {
 }
 async function _onFolderDrop(e, folderEl) {
     e.preventDefault();
+    e.stopPropagation();
     folderEl.classList.remove('drag-over');
     const targetPath = folderEl.dataset.path;
     if (!targetPath) return;
     try {
         const payload = JSON.parse(e.dataTransfer.getData('text/plain'));
-        if (!payload.uids || !payload.uids.length) return;
-        if (payload.fromFolder === targetPath) return;
         const accountId = document.getElementById('explorer-account').value;
-        const promises = payload.uids.map(uid =>
-            api(`/accounts/${accountId}/message/${uid}/move?folder=${encodeURIComponent(payload.fromFolder)}&storage=${payload.storage || 'imap'}`, {
+
+        if (payload.type === 'folder') {
+            // Folder → folder: rename/move via IMAP RENAME
+            const srcPath = payload.folderPath;
+            if (srcPath === targetPath) return;
+            // Prevent dropping into self or own child
+            if (targetPath.startsWith(srcPath + '/') || targetPath.startsWith(srcPath + '.')) return;
+            const folderName = srcPath.includes('/') ? srcPath.split('/').pop() : srcPath.includes('.') ? srcPath.split('.').pop() : srcPath;
+            // Detect separator from target's existing children
+            const sep = targetPath.includes('.') ? '.' : '/';
+            const newPath = targetPath + sep + folderName;
+            if (!confirm(`Déplacer "${srcPath}" vers "${newPath}" ?`)) return;
+            await api(`/accounts/${accountId}/rename-folder`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ target_folder: targetPath })
-            })
-        );
-        await Promise.all(promises);
-        loadMessages(explorerCurrentPage);
-    } catch(err) { console.error('Drop move failed:', err); }
+                body: JSON.stringify({ old_name: srcPath, new_name: newPath })
+            });
+            await loadFolders();
+        } else {
+            // Emails → folder: move emails
+            if (!payload.uids || !payload.uids.length) return;
+            if (payload.fromFolder === targetPath) return;
+            const promises = payload.uids.map(uid =>
+                api(`/accounts/${accountId}/message/${uid}/move?folder=${encodeURIComponent(payload.fromFolder)}&storage=${payload.storage || 'imap'}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_folder: targetPath })
+                })
+            );
+            await Promise.all(promises);
+            loadMessages(explorerCurrentPage);
+        }
+    } catch(err) { console.error('Drop failed:', err); alert('Erreur: ' + err.message); }
 }
 
 async function selectFolder(path, storage) {

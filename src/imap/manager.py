@@ -207,6 +207,16 @@ class IMAPManager:
         logger.error(f"Failed to delete folder: {folder}")
         return False
 
+    def rename_folder(self, old_name: str, new_name: str) -> bool:
+        """Rename/move an IMAP folder."""
+        status, _ = self._conn.rename(_imap_quote(old_name), _imap_quote(new_name))
+        if status == "OK":
+            self._conn.subscribe(_imap_quote(new_name))
+            logger.info(f"Renamed folder: {old_name} -> {new_name}")
+            return True
+        logger.error(f"Failed to rename folder: {old_name} -> {new_name}")
+        return False
+
     def move_email(self, uid: str, from_folder: str, to_folder: str) -> bool:
         """Move an email to another folder via IMAP. Creates folder if needed."""
         self._conn.select(_imap_quote(from_folder))

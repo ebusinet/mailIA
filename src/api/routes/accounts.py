@@ -428,6 +428,43 @@ async def delete_folder(
     return {"status": "deleted", "folder": req.folder_name}
 
 
+class RenameFolderRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
+@router.post("/{account_id}/rename-folder")
+async def rename_folder(
+    account_id: int,
+    req: RenameFolderRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename/move an IMAP folder."""
+    protected = {"INBOX", "Sent", "Drafts", "Trash", "Junk", "Spam"}
+    base_name = req.old_name.rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+    if base_name in protected or req.old_name.upper() == "INBOX":
+        raise HTTPException(status_code=400, detail=f"Cannot move system folder: {req.old_name}")
+
+    account = await _get_account(account_id, user, db)
+    from src.imap.manager import IMAPManager, IMAPConfig
+    from src.security import decrypt_value as _dec
+    config = IMAPConfig(
+        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+        user=account.imap_user, password=_dec(account.imap_password_encrypted),
+    )
+    try:
+        with IMAPManager(config) as imap:
+            ok = imap.rename_folder(req.old_name, req.new_name)
+            if not ok:
+                raise HTTPException(status_code=400, detail="Failed to rename folder")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+    return {"status": "renamed", "old_name": req.old_name, "new_name": req.new_name}
+
+
 @router.get("/{account_id}/folders-raw")
 async def list_folders_raw(
     account_id: int,
