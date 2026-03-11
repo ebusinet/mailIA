@@ -925,7 +925,7 @@
                 </div>
                 <div class="explorer-right" style="flex:1;display:flex;flex-direction:column">
                     <div id="explorer-folder-header" style="margin-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center">
-                        <span id="explorer-folder-name" style="color:#38bdf8;font-weight:600"></span>
+                        <span id="explorer-folder-name" style="font-weight:600;font-size:0.9rem"></span>
                         <div style="display:flex;align-items:center;gap:0.5rem">
                             <button class="btn-sm" id="btn-toggle-pane" onclick="togglePaneMode()" style="font-size:0.75rem;padding:0.2rem 0.5rem" title="Activer/desactiver le panneau de lecture">&#9776; Panneau</button>
                             <span id="explorer-folder-count" style="color:#64748b;font-size:0.85rem"></span>
@@ -1708,7 +1708,7 @@ async function doGlobalSearch() {
 
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Recherche globale...</p>';
-    document.getElementById('explorer-folder-name').textContent = 'Recherche globale';
+    document.getElementById('explorer-folder-name').innerHTML = '<span style="color:#38bdf8">Recherche globale</span>';
     document.getElementById('explorer-pager').innerHTML = '';
     document.getElementById('explorer-search-clear').style.display = 'inline-block';
 
@@ -2930,6 +2930,28 @@ function folderDisplayName(path) {
     const lf = explorerLocalFoldersCache.find(x => x.path === path);
     return lf ? lf.name : path;
 }
+function _renderBreadcrumb(path) {
+    if (!path) return '';
+    // Split path into segments using both . and / separators
+    const sep = path.includes('/') ? '/' : '.';
+    const parts = path.split(sep);
+    if (parts.length <= 1) return `<span style="color:#38bdf8">${esc(folderDisplayName(path))}</span>`;
+    // Build breadcrumb: parent segments faded, last segment highlighted
+    const parentParts = parts.slice(0, -1);
+    const current = parts[parts.length - 1];
+    // Decode display names for each part
+    const parentHtml = parentParts.map((p, i) => {
+        const partPath = parts.slice(0, i + 1).join(sep);
+        const display = folderDisplayName(partPath) || p;
+        return `<span style="color:#64748b;cursor:pointer" onclick="selectFolder('${escAttr(partPath)}', '${explorerCurrentStorage}')">${esc(display)}</span>`;
+    }).join('<span style="color:#475569;margin:0 0.2rem">/</span>');
+    return parentHtml + '<span style="color:#475569;margin:0 0.2rem">/</span>' + `<span style="color:#38bdf8">${esc(folderDisplayName(path) || current)}</span>`;
+}
+function _setFolderName(path) {
+    const el = document.getElementById('explorer-folder-name');
+    if (!path) { el.innerHTML = ''; return; }
+    el.innerHTML = _renderBreadcrumb(path);
+}
 function _isSentFolder(path) {
     if (!path) return false;
     const name = folderDisplayName(path).toLowerCase();
@@ -2961,7 +2983,7 @@ async function loadFolders() {
     if (!accountId) {
         treeEl.innerHTML = '<p style="color:#64748b;font-size:0.85rem">Selectionnez un compte</p>';
         document.getElementById('explorer-messages').innerHTML = '';
-        document.getElementById('explorer-folder-name').textContent = '';
+        _setFolderName('');
         document.getElementById('explorer-folder-count').textContent = '';
         return;
     }
@@ -3198,6 +3220,23 @@ async function _onFolderDrop(e, folderEl) {
     } catch(err) { console.error('Drop failed:', err); alert('Erreur: ' + err.message); }
 }
 
+function _expandParents(path, storage) {
+    // Find the active folder-item and walk up the DOM to expand all folder-children ancestors
+    const activeEl = document.querySelector(`.folder-item[data-path="${CSS.escape(path)}"][data-storage="${storage}"]`);
+    if (!activeEl) return;
+    let el = activeEl.parentElement;
+    while (el) {
+        if (el.classList && el.classList.contains('folder-children')) {
+            el.style.display = 'block';
+            // Update toggle arrow
+            const toggle = el.previousElementSibling?.querySelector('.folder-toggle');
+            if (toggle && toggle.innerHTML.includes('9654')) toggle.innerHTML = '&#9660;';
+        }
+        el = el.parentElement;
+        if (el && el.id === 'explorer-tree') break;
+    }
+}
+
 async function selectFolder(path, storage) {
     storage = storage || 'imap';
     explorerCurrentStorage = storage;
@@ -3205,6 +3244,8 @@ async function selectFolder(path, storage) {
     document.querySelectorAll('.folder-item').forEach(el => {
         if (el.dataset.path === path && el.dataset.storage === storage) el.classList.add('active');
     });
+    // Expand all parent folders in the tree view
+    _expandParents(path, storage);
     explorerCurrentFolder = path;
     explorerCurrentPage = 0;
     explorerSearchQuery = '';
@@ -3415,7 +3456,7 @@ async function searchInFolder() {
 async function searchMultiFolders(q, folders) {
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Recherche dans ' + folders.length + ' dossier(s)...</p>';
-    document.getElementById('explorer-folder-name').textContent = 'Recherche multi-dossiers';
+    document.getElementById('explorer-folder-name').innerHTML = '<span style="color:#38bdf8">Recherche multi-dossiers</span>';
     document.getElementById('explorer-pager').innerHTML = '';
 
     try {
@@ -3556,7 +3597,7 @@ async function loadMessages(page) {
 
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Chargement...</p>';
-    document.getElementById('explorer-folder-name').textContent = folderDisplayName(folder);
+    _setFolderName(folder);
     document.getElementById('explorer-pager').style.display = '';
 
     try {
@@ -4694,7 +4735,7 @@ async function promptDeleteFolder() {
         explorerCurrentFolder = '';
         document.getElementById('btn-delete-folder').style.display = 'none';
         document.getElementById('explorer-messages').innerHTML = '';
-        document.getElementById('explorer-folder-name').textContent = '';
+        _setFolderName('');
         document.getElementById('explorer-folder-count').textContent = '';
         await loadFolders();
     } catch(e) {
