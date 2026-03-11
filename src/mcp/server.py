@@ -6,26 +6,59 @@ Or:        fastmcp run src/mcp/server.py
 """
 import json
 import logging
+import os as _os
 import smtplib
 import ssl as ssl_mod
+import time as _time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Annotated
 
+import redis as _redis
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.middleware import Middleware
 from pydantic import Field
 
 from src.config import get_settings
+from src.imap.manager import _decode_imap_utf7, _encode_imap_utf7
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-mailia")
 
+
+def _normalize_folder(folder: str) -> str:
+    """Ensure folder name is UTF-8. Decodes IMAP UTF-7 if detected."""
+    import re
+    if re.search(r'&[A-Za-z0-9+,]+-', folder):
+        return _decode_imap_utf7(folder)
+    return folder
+
+
+async def _es_delete_docs(user_id: int, account_id: int, folder: str, uids: list[str]):
+    """Delete docs from ES, trying both UTF-8 and UTF-7 folder name in doc ID.
+    Chunked to handle 10K+ UIDs without ES timeout."""
+    try:
+        from src.search.indexer import get_es_client, _index_name
+        es = await get_es_client()
+        index = _index_name(user_id)
+        utf7_folder = _encode_imap_utf7(folder)
+        ops = []
+        for uid in uids:
+            ops.append({"delete": {"_index": index, "_id": f"{account_id}-{folder}-{uid}"}})
+            if utf7_folder != folder:
+                ops.append({"delete": {"_index": index, "_id": f"{account_id}-{utf7_folder}-{uid}"}})
+        # Chunk bulk ops (1000 per call) to avoid ES timeouts on large batches
+        chunk_size = 1000
+        for i in range(0, len(ops), chunk_size):
+            await es.bulk(operations=ops[i:i + chunk_size])
+        await es.close()
+    except Exception as e:
+        logger.warning(f"ES cleanup failed: {e}")
+
 # User ID is configured at startup via env var MCP_USER_ID
 USER_ID: int = 0
-
-import os as _os
 
 _mcp_prefix = _os.environ.get("MCP_PATH_PREFIX", "")
 
@@ -39,6 +72,84 @@ mcp = FastMCP(
     sse_path=f"{_mcp_prefix}/sse",
     message_path=f"{_mcp_prefix}/messages/",
 )
+
+
+# --- Tool activity tracking via Redis ---
+
+def _get_redis():
+    settings = get_settings()
+    return _redis.from_url(settings.redis_url, decode_responses=True)
+
+
+def _redis_key(user_id: int) -> str:
+    return f"mcp:tool_activity:{user_id}"
+
+
+class ToolActivityMiddleware(Middleware):
+    """Publishes tool call start/end events to Redis for real-time UI tracking."""
+
+    async def on_call_tool(self, context, call_next):
+        tool_name = context.message.name
+        args = context.message.arguments or {}
+        user_id = USER_ID
+        call_id = f"{tool_name}:{_time.time():.3f}"
+        rkey = _redis_key(user_id)
+
+        arg_summary = _summarize_args(tool_name, args)
+
+        try:
+            r = _get_redis()
+            event = json.dumps({
+                "id": call_id, "tool": tool_name, "args": arg_summary,
+                "status": "running", "ts": _time.time(),
+            })
+            r.rpush(rkey, event)
+            r.expire(rkey, 600)
+        except Exception:
+            pass
+
+        try:
+            result = await call_next(context)
+            status = "done"
+        except Exception as e:
+            status = f"error: {str(e)[:80]}"
+            raise
+        finally:
+            try:
+                r = _get_redis()
+                event = json.dumps({
+                    "id": call_id, "tool": tool_name, "args": arg_summary,
+                    "status": status, "ts": _time.time(),
+                })
+                r.rpush(rkey, event)
+                r.expire(rkey, 600)
+            except Exception:
+                pass
+
+        return result
+
+
+def _summarize_args(tool_name: str, args: dict) -> str:
+    """Short human-readable summary of tool arguments."""
+    if not args:
+        return ""
+    if "folder" in args and "account_id" in args:
+        parts = [args.get("folder", "")]
+        if "query" in args:
+            parts.append(f'"{args["query"][:40]}"')
+        if "imap_criteria" in args:
+            parts.append(args["imap_criteria"][:50])
+        if "uids" in args:
+            uids = args["uids"]
+            count = len(uids) if isinstance(uids, list) else str(uids).count(",") + 1
+            parts.append(f"{count} UIDs")
+        return " · ".join(parts)
+    if "query" in args:
+        return f'"{args["query"][:50]}"'
+    return ", ".join(f"{k}={str(v)[:30]}" for k, v in list(args.items())[:3])
+
+
+mcp.add_middleware(ToolActivityMiddleware())
 
 
 def _user_id() -> int:
@@ -55,7 +166,7 @@ def _user_id() -> int:
 async def search_emails(
     query: Annotated[str, Field(description="Search query (full-text)")] = "",
     account_id: Annotated[int | None, Field(description="Filter by account ID")] = None,
-    folder: Annotated[str | None, Field(description="Filter by folder name")] = None,
+    folder: Annotated[str | None, Field(description="Filter by folder (use display name with accents)")] = None,
     from_addr: Annotated[str | None, Field(description="Filter by sender (partial match)")] = None,
     date_from: Annotated[str | None, Field(description="Start date (YYYY-MM-DD)")] = None,
     date_to: Annotated[str | None, Field(description="End date (YYYY-MM-DD)")] = None,
@@ -137,7 +248,7 @@ async def semantic_search(
 
 @mcp.tool(tags={"search"})
 async def count_emails(
-    folder: Annotated[str | None, Field(description="Filter by folder")] = None,
+    folder: Annotated[str | None, Field(description="Filter by folder (use display name with accents)")] = None,
     from_addr: Annotated[str | None, Field(description="Filter by sender")] = None,
     date_from: Annotated[str | None, Field(description="Start date (YYYY-MM-DD)")] = None,
     date_to: Annotated[str | None, Field(description="End date (YYYY-MM-DD)")] = None,
@@ -155,7 +266,15 @@ async def count_emails(
         if account_id:
             filters.append({"term": {"account_id": account_id}})
         if folder:
-            filters.append({"term": {"folder": folder}})
+            from src.imap.manager import _encode_imap_utf7
+            utf7 = _encode_imap_utf7(folder)
+            if utf7 != folder:
+                filters.append({"bool": {"should": [
+                    {"term": {"folder": folder}},
+                    {"term": {"folder": utf7}},
+                ], "minimum_should_match": 1}})
+            else:
+                filters.append({"term": {"folder": folder}})
         if from_addr:
             filters.append({"wildcard": {"from_addr": f"*{from_addr}*"}})
         if date_from or date_to:
@@ -196,11 +315,67 @@ async def get_folders_stats(
                 "aggs": {"folders": {"terms": {"field": "folder", "size": 500}}},
             },
         )
+        from src.imap.manager import _decode_imap_utf7
         buckets = result.get("aggregations", {}).get("folders", {}).get("buckets", [])
-        folders = {b["key"]: b["doc_count"] for b in buckets}
+        folders = {_decode_imap_utf7(b["key"]): b["doc_count"] for b in buckets}
         return {"total": sum(folders.values()), "folders": folders}
     except Exception as e:
         return {"total": 0, "folders": {}, "error": str(e)}
+    finally:
+        await es.close()
+
+
+@mcp.tool(tags={"search"})
+async def get_senders_stats(
+    account_id: Annotated[int | None, Field(description="Filter by account ID")] = None,
+    folder: Annotated[str | None, Field(description="Filter by folder (use display name with accents)")] = None,
+    min_count: Annotated[int, Field(description="Minimum email count to include a sender")] = 2,
+    top_n: Annotated[int, Field(description="Number of top senders to return")] = 100,
+) -> dict:
+    """Get top email senders with counts — perfect for identifying newsletters, spam, and
+    high-volume senders in a folder. Use this FIRST when analyzing folder content for cleanup.
+    Returns senders sorted by email count (descending)."""
+    from src.mcp.context import get_es
+    from src.search.indexer import _index_name
+
+    uid = _user_id()
+    index = _index_name(uid)
+    es = await get_es()
+    try:
+        filters = []
+        if account_id:
+            filters.append({"term": {"account_id": account_id}})
+        if folder:
+            from src.imap.manager import _encode_imap_utf7
+            utf7 = _encode_imap_utf7(folder)
+            if utf7 != folder:
+                filters.append({"bool": {"should": [
+                    {"term": {"folder": folder}},
+                    {"term": {"folder": utf7}},
+                ], "minimum_should_match": 1}})
+            else:
+                filters.append({"term": {"folder": folder}})
+
+        query = {"bool": {"filter": filters}} if filters else {"match_all": {}}
+        result = await es.search(
+            index=index,
+            body={
+                "size": 0,
+                "query": query,
+                "aggs": {
+                    "senders": {
+                        "terms": {"field": "from_addr", "size": top_n, "min_doc_count": min_count,
+                                  "order": {"_count": "desc"}},
+                    }
+                },
+            },
+        )
+        buckets = result.get("aggregations", {}).get("senders", {}).get("buckets", [])
+        senders = [{"email": b["key"], "count": b["doc_count"]} for b in buckets]
+        total = result["hits"]["total"]["value"]
+        return {"total_emails": total, "unique_senders": len(senders), "senders": senders}
+    except Exception as e:
+        return {"total_emails": 0, "senders": [], "error": str(e)}
     finally:
         await es.close()
 
@@ -212,13 +387,14 @@ async def get_folders_stats(
 @mcp.tool(tags={"read"})
 async def read_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
 ) -> dict:
     """Read the full content of a specific email: headers, body text, and attachment list."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -247,13 +423,14 @@ async def read_email(
 @mcp.tool(tags={"read"})
 async def list_emails(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")] = "INBOX",
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")] = "INBOX",
     limit: Annotated[int, Field(description="Max emails to list", ge=1, le=100)] = 20,
 ) -> dict:
     """List recent emails in an IMAP folder with subject, sender, and date."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -303,8 +480,10 @@ async def list_folders(
         folders = imap.list_folders()
         return {
             "account_id": account_id,
+            "separator": folders[0]["separator"] if folders else "/",
+            "note": "ALWAYS use 'name' (display name) when calling other tools, NEVER use 'imap_raw'.",
             "folders": [
-                {"name": f["name"], "display_name": f.get("display_name", f["name"])}
+                {"name": f.get("display_name", f["name"]), "imap_raw": f["name"], "separator": f.get("separator", "/")}
                 for f in folders
             ],
         }
@@ -315,7 +494,7 @@ async def list_folders(
 @mcp.tool(tags={"read"})
 async def get_attachment(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
     attachment_index: Annotated[int, Field(description="Attachment index (0-based)")] = 0,
 ) -> dict:
@@ -324,6 +503,7 @@ async def get_attachment(
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -351,14 +531,17 @@ async def get_attachment(
 @mcp.tool(tags={"action"})
 async def move_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="Current IMAP folder")],
+    folder: Annotated[str, Field(description="Source folder (use display name with accents)")],
     uid: Annotated[str, Field(description="Email UID")],
-    target_folder: Annotated[str, Field(description="Target folder to move the email to")],
+    target_folder: Annotated[str, Field(description="Target folder (use display name with accents)")],
 ) -> dict:
-    """Move an email to a different IMAP folder. Creates the target folder if needed."""
+    """Move a single email to a different IMAP folder. Creates the target folder if needed.
+    WARNING: For moving multiple emails, ALWAYS use move_emails_bulk instead — it is 50-100x faster."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
+    target_folder = _normalize_folder(target_folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -369,17 +552,24 @@ async def move_email(
         ok = imap.move_email(uid, folder, target_folder)
         if not ok:
             raise ToolError(f"Failed to move UID {uid} to {target_folder}")
-        return {"status": "moved", "uid": uid, "from": folder, "to": target_folder}
     finally:
         imap.disconnect()
+
+    # Remove old ES doc (new folder will be indexed on next sync)
+    await _es_delete_docs(user_id, account_id, folder, [uid])
+
+    return {"status": "moved", "uid": uid, "from": folder, "to": target_folder}
 
 
 @mcp.tool(tags={"action"})
 async def move_emails_bulk(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    moves: Annotated[list[dict], Field(description="List of {folder, uid, target_folder}")],
+    moves: Annotated[list[dict], Field(description="List of {folder, uid, target_folder}. "
+        "When all emails are from the same folder and going to the same target, "
+        "uses optimized batch IMAP operations.")],
 ) -> dict:
-    """Move multiple emails at once. Each move specifies folder, uid, and target_folder."""
+    """Move multiple emails at once. Each move specifies folder, uid, and target_folder.
+    Automatically batches same-folder moves for much better performance."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
@@ -390,28 +580,32 @@ async def move_emails_bulk(
     imap = get_imap(account)
     imap.connect()
     try:
-        results = {"moved": 0, "failed": 0, "details": []}
+        # Group by (from_folder, to_folder) for batch optimization
+        groups: dict[tuple[str, str], list[str]] = {}
         for m in moves:
-            try:
-                ok = imap.move_email(m["uid"], m["folder"], m["target_folder"])
-                if ok:
-                    results["moved"] += 1
-                    results["details"].append({"uid": m["uid"], "status": "moved"})
-                else:
-                    results["failed"] += 1
-                    results["details"].append({"uid": m["uid"], "status": "failed"})
-            except Exception as e:
-                results["failed"] += 1
-                results["details"].append({"uid": m["uid"], "status": "error", "error": str(e)})
-        return results
+            key = (_normalize_folder(m["folder"]), _normalize_folder(m["target_folder"]))
+            groups.setdefault(key, []).append(m["uid"])
+
+        total_moved = 0
+        total_failed = 0
+        for (from_folder, to_folder), uids in groups.items():
+            result = imap.move_emails_bulk(uids, from_folder, to_folder)
+            total_moved += result["moved"]
+            total_failed += result["failed"]
     finally:
         imap.disconnect()
+
+    # Remove old ES docs for moved emails (new folder indexed on next sync)
+    for (from_folder, _), uids in groups.items():
+        await _es_delete_docs(user_id, account_id, from_folder, uids)
+
+    return {"moved": total_moved, "failed": total_failed}
 
 
 @mcp.tool(tags={"action"})
 async def flag_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
     flag: Annotated[str, Field(description="Flag: important, read, seen, answered, draft")] = "important",
     action: Annotated[str, Field(description="'add' or 'remove'")] = "add",
@@ -420,6 +614,7 @@ async def flag_email(
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -445,13 +640,16 @@ async def flag_email(
 @mcp.tool(tags={"action"})
 async def delete_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
 ) -> dict:
-    """Delete an email (moves to Trash or flags as Deleted)."""
+    """Delete a single email (moves to Trash or flags as Deleted).
+    WARNING: For deleting multiple emails, ALWAYS use search_and_delete_emails (by criteria)
+    or delete_emails_bulk (by UIDs) instead — they are 50-100x faster."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -460,20 +658,30 @@ async def delete_email(
     imap.connect()
     try:
         ok = imap.delete_email(uid, folder)
-        return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder}
     finally:
         imap.disconnect()
 
+    if ok:
+        await _es_delete_docs(user_id, account_id, folder, [uid])
+
+    return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder}
+
 
 @mcp.tool(tags={"action"})
-async def create_folder(
+async def delete_emails_bulk(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder_name: Annotated[str, Field(description="Full folder path to create (e.g. INBOX.Archives.2024)")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
+    uids: Annotated[list[str], Field(description="List of email UIDs to delete")],
 ) -> dict:
-    """Create a new IMAP folder."""
+    """Delete multiple emails by UIDs in one batch (50-100x faster than one-by-one).
+    All UIDs must be from the same folder. Moves to Trash or flags as Deleted.
+    Also removes from search index.
+    PREFERRED over delete_email when you already have a list of UIDs.
+    If you need to delete by criteria (sender, subject, etc.), use search_and_delete_emails instead."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -481,8 +689,257 @@ async def create_folder(
     imap = get_imap(account)
     imap.connect()
     try:
-        ok = imap.create_folder(folder_name)
-        return {"status": "created" if ok else "failed", "folder": folder_name}
+        result = imap.delete_emails_bulk(uids, folder)
+    finally:
+        imap.disconnect()
+
+    await _es_delete_docs(user_id, account_id, folder, uids)
+
+    return result
+
+
+@mcp.tool(tags={"action"})
+async def search_and_delete_emails(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
+    imap_criteria: Annotated[str, Field(description=(
+        "IMAP SEARCH criteria string. Examples: "
+        "'FROM \"newsletter@example.com\"' — single sender, "
+        "'OR FROM \"news@a.com\" FROM \"news@b.com\"' — multiple senders, "
+        "'SUBJECT \"newsletter\"' — by subject, "
+        "'FROM \"@darty.com\"' — by domain, "
+        "'OR (OR FROM \"a@x.com\" FROM \"b@x.com\") FROM \"c@y.com\"' — 3+ senders"
+    ))],
+    max_delete: Annotated[int, Field(description="Maximum emails to delete per call (safety limit, default 1000)")] = 1000,
+) -> dict:
+    """BEST tool for bulk cleanup. Searches directly in IMAP and deletes ALL matches in one call.
+    Use this to delete newsletters, spam, promos, or any emails matching a pattern.
+    Much faster and more reliable than search + delete separately.
+    Examples: delete all emails from a sender, delete all with "newsletter" in subject, etc.
+    Supports standard IMAP SEARCH syntax including OR for multiple criteria."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    folder = _normalize_folder(folder)
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder))
+        status, data = imap._conn.uid("SEARCH", None, imap_criteria)
+        if status != "OK" or not data[0]:
+            return {"found": 0, "deleted": 0, "failed": 0}
+        uids = data[0].decode().split()
+        total_found = len(uids)
+        # Apply safety limit
+        uids = uids[:max_delete]
+        result = imap.delete_emails_bulk(uids, folder)
+        result["found"] = total_found
+        result["limited_to"] = max_delete if total_found > max_delete else None
+    finally:
+        imap.disconnect()
+
+    await _es_delete_docs(user_id, account_id, folder, uids)
+
+    return result
+
+
+@mcp.tool(tags={"action"})
+async def search_and_move_emails(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Source folder (use display name with accents, e.g. 'Éléments supprimés')")],
+    target_folder: Annotated[str, Field(description="Destination folder (use display name with accents)")],
+    imap_criteria: Annotated[str, Field(description=(
+        "IMAP SEARCH criteria string. Examples: "
+        "'FROM \"newsletter@example.com\"' — single sender, "
+        "'OR FROM \"news@a.com\" FROM \"news@b.com\"' — multiple senders, "
+        "'SUBJECT \"newsletter\"' — by subject, "
+        "'FROM \"@darty.com\"' — by domain, "
+        "'OR (OR FROM \"a@x.com\" FROM \"b@x.com\") FROM \"c@y.com\"' — 3+ senders"
+    ))],
+    max_move: Annotated[int, Field(description="Maximum emails to move per call (safety limit, default 1000)")] = 1000,
+) -> dict:
+    """BEST tool for bulk organization. Searches directly in IMAP and moves ALL matches to target folder in one call.
+    Use this to organize emails by sender, subject, or any pattern — much faster than list + move separately.
+    Creates the target folder automatically if it doesn't exist.
+    Supports standard IMAP SEARCH syntax including OR for multiple criteria."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    folder = _normalize_folder(folder)
+    target_folder = _normalize_folder(target_folder)
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder))
+        status, data = imap._conn.uid("SEARCH", None, imap_criteria)
+        if status != "OK" or not data[0]:
+            return {"found": 0, "moved": 0, "failed": 0}
+        uids = data[0].decode().split()
+        total_found = len(uids)
+        uids = uids[:max_move]
+        result = imap.move_emails_bulk(uids, folder, target_folder)
+        result["found"] = total_found
+        result["limited_to"] = max_move if total_found > max_move else None
+    finally:
+        imap.disconnect()
+
+    await _es_delete_docs(user_id, account_id, folder, uids)
+
+    return result
+
+
+@mcp.tool(tags={"action"})
+async def organize_emails(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Source folder to organize (use display name with accents)")],
+    rules: Annotated[list[dict], Field(description=(
+        "List of sorting rules. Each rule is {\"criteria\": \"IMAP SEARCH string\", \"target_folder\": \"destination\"}. "
+        "Examples: ["
+        "{\"criteria\": \"FROM \\\"@darty.com\\\"\", \"target_folder\": \"PRO/Commerce\"}, "
+        "{\"criteria\": \"OR FROM \\\"@newsletter.fr\\\" SUBJECT \\\"newsletter\\\"\", \"target_folder\": \"Newsletters\"}, "
+        "{\"criteria\": \"FROM \\\"@banque.fr\\\"\", \"target_folder\": \"Finances\"}"
+        "]. Rules are applied sequentially — emails matched by an earlier rule are not re-matched by later ones."
+    ))],
+    max_per_rule: Annotated[int, Field(description="Maximum emails to move per rule (default 1000)")] = 1000,
+) -> dict:
+    """ULTIMATE tool for bulk email organization. Applies MULTIPLE sorting rules in ONE call with a single IMAP connection.
+    Instead of calling search_and_move_emails 20 times (20 tool calls), pass all 20 rules here (1 tool call).
+    Each rule searches in IMAP and moves all matches to the target folder.
+    Creates target folders automatically. Rules run sequentially so already-moved emails are skipped."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    if not rules:
+        raise ToolError("At least one rule is required")
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    folder = _normalize_folder(folder)
+    imap = get_imap(account)
+    imap.connect()
+
+    results = []
+    all_es_deletes: list[tuple[str, list[str]]] = []  # (folder, uids) pairs
+    try:
+        from src.imap.manager import _imap_quote
+        for rule in rules:
+            criteria = rule.get("criteria", "")
+            target = _normalize_folder(rule.get("target_folder", ""))
+            if not criteria or not target:
+                results.append({"criteria": criteria, "target_folder": target, "error": "missing criteria or target_folder"})
+                continue
+
+            # Re-SELECT source folder each iteration (UIDs shift after EXPUNGE)
+            imap._conn.select(_imap_quote(folder))
+            status, data = imap._conn.uid("SEARCH", None, criteria)
+            if status != "OK" or not data[0]:
+                results.append({"criteria": criteria, "target_folder": target, "found": 0, "moved": 0, "failed": 0})
+                continue
+
+            uids = data[0].decode().split()
+            total_found = len(uids)
+            uids = uids[:max_per_rule]
+            result = imap.move_emails_bulk(uids, folder, target)
+            result["criteria"] = criteria
+            result["target_folder"] = target
+            result["found"] = total_found
+            result["limited_to"] = max_per_rule if total_found > max_per_rule else None
+            results.append(result)
+            all_es_deletes.append((folder, uids))
+    finally:
+        imap.disconnect()
+
+    # ES cleanup for all moved emails
+    for src_folder, uids in all_es_deletes:
+        await _es_delete_docs(user_id, account_id, src_folder, uids)
+
+    total_moved = sum(r.get("moved", 0) for r in results)
+    total_failed = sum(r.get("failed", 0) for r in results)
+    return {"total_moved": total_moved, "total_failed": total_failed, "rules_applied": len(results), "details": results}
+
+
+@mcp.tool(tags={"action"})
+async def create_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    path: Annotated[str, Field(description=(
+        "Full folder path using '/' as separator. Examples: "
+        "'Archives' (root level), "
+        "'Éléments supprimés/PRO' (subfolder of Éléments supprimés), "
+        "'Éléments supprimés/PRO/Clients' (nested). "
+        "Use display names with accents. The server resolves the correct IMAP separator automatically."
+    ))],
+) -> dict:
+    """Create a new IMAP folder. Use '/' as separator in the path — the tool
+    automatically converts to the correct IMAP separator (which may differ per hierarchy)."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    path = _normalize_folder(path)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        folders = imap.list_folders()
+
+        # Split user path by '/' → e.g. ["Éléments supprimés", "TEST"]
+        parts = path.split("/")
+        imap_sep = "/"  # default
+
+        if len(parts) > 1:
+            parent_display = parts[0]
+            # Detect ACTUAL separator by inspecting existing child folders.
+            # OVH reports '/' in LIST but uses '.' for some folder hierarchies.
+            for f in folders:
+                display = f.get("display_name", f["name"])
+                raw = f.get("name", "")
+                for sep in [".", "/"]:
+                    if display.startswith(parent_display + sep) or raw.startswith(parent_display + sep):
+                        imap_sep = sep
+                        break
+                if imap_sep != "/":
+                    break
+
+        imap_path = imap_sep.join(parts)
+        ok = imap.create_folder(imap_path)
+        return {"status": "created" if ok else "failed", "folder": path, "imap_path": imap_path, "separator_used": imap_sep}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def delete_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder_name: Annotated[str, Field(description="Full folder path to delete (use display name with accents). Delete deepest subfolders first.")],
+) -> dict:
+    """Delete an IMAP folder. The folder should be empty. Delete children before parents."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder_name = _normalize_folder(folder_name)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        ok = imap.delete_folder(folder_name)
+        return {"status": "deleted" if ok else "failed", "folder": folder_name}
     finally:
         imap.disconnect()
 
@@ -556,7 +1013,7 @@ async def send_email(
 @mcp.tool(tags={"send"})
 async def reply_to_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="Folder of the original email")],
+    folder: Annotated[str, Field(description="Folder of the original email (use display name with accents)")],
     uid: Annotated[str, Field(description="UID of the email to reply to")],
     body: Annotated[str, Field(description="Reply body text")],
     reply_all: Annotated[bool, Field(description="Reply to all recipients")] = False,
@@ -566,6 +1023,7 @@ async def reply_to_email(
     from src.mcp.helpers import get_account
     from src.security import decrypt_value
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -608,7 +1066,7 @@ async def reply_to_email(
 @mcp.tool(tags={"send"})
 async def forward_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="Folder of the email to forward")],
+    folder: Annotated[str, Field(description="Folder of the email to forward (use display name with accents)")],
     uid: Annotated[str, Field(description="UID of the email to forward")],
     to: Annotated[list[str], Field(description="Recipients to forward to")],
     comment: Annotated[str, Field(description="Optional comment to add above the forwarded email")] = "",
@@ -618,6 +1076,7 @@ async def forward_email(
     from src.mcp.helpers import get_account
     from src.security import decrypt_value
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -695,7 +1154,7 @@ async def save_draft(
 @mcp.tool(tags={"ai"})
 async def summarize_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
 ) -> dict:
     """Summarize an email in a few sentences using AI."""
@@ -703,6 +1162,7 @@ async def summarize_email(
     from src.mcp.helpers import get_account, get_user
     from src.ai.router import get_llm_for_user
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -771,7 +1231,7 @@ async def summarize_thread(
 @mcp.tool(tags={"ai"})
 async def classify_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
     categories: Annotated[list[str], Field(description="Categories to classify into")],
 ) -> dict:
@@ -780,6 +1240,7 @@ async def classify_email(
     from src.mcp.helpers import get_account, get_user
     from src.ai.router import get_llm_for_user
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -803,7 +1264,7 @@ async def classify_email(
 @mcp.tool(tags={"ai"})
 async def extract_info(
     account_id: Annotated[int, Field(description="Mail account ID")],
-    folder: Annotated[str, Field(description="IMAP folder name")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
     fields: Annotated[list[str], Field(description="Fields to extract (e.g. date, amount, company, phone)")],
 ) -> dict:
@@ -812,6 +1273,7 @@ async def extract_info(
     from src.mcp.helpers import get_account, get_user
     from src.ai.router import get_llm_for_user
 
+    folder = _normalize_folder(folder)
     user_id = _user_id()
     async with get_db() as db:
         account = await get_account(db, user_id, account_id)
@@ -1575,7 +2037,7 @@ async def find_duplicates_imap_vs_local(
 async def copy_local_to_imap(
     account_id: Annotated[int, Field(description="Mail account ID")],
     local_folder_path: Annotated[str, Field(description="Source local folder path")],
-    imap_folder: Annotated[str, Field(description="Target IMAP folder")],
+    imap_folder: Annotated[str, Field(description="Target folder (use display name with accents)")],
     delete_after: Annotated[bool, Field(description="Delete local copy after successful IMAP upload")] = False,
 ) -> dict:
     """Copy emails from a local folder to an IMAP folder.
@@ -1585,6 +2047,8 @@ async def copy_local_to_imap(
     import time
     from sqlalchemy import select, delete as sa_delete
     from src.mcp.context import get_db, get_imap
+
+    imap_folder = _normalize_folder(imap_folder)
     from src.mcp.helpers import get_account
     from src.db.models import LocalFolder, LocalEmail
 
@@ -1733,7 +2197,7 @@ def main():
 
     if transport == "sse":
         import asyncio
-        asyncio.run(mcp.run_sse_async(host=host, port=port))
+        asyncio.run(mcp.run_async(transport="sse", host=host, port=port))
     else:
         mcp.run(transport="stdio")
 

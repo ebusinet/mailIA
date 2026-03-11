@@ -17,9 +17,16 @@ PROCESSED_FLAG = "X-MailIA-Processed"
 
 
 def _imap_quote(folder: str) -> str:
-    """Quote folder name for IMAP commands (RFC 3501)."""
+    """Quote folder name for IMAP commands (RFC 3501).
+
+    Auto-encodes UTF-8 folder names to IMAP modified UTF-7 if they contain
+    non-ASCII characters. Already-encoded names (pure ASCII) pass through.
+    """
     if folder.startswith('"') and folder.endswith('"'):
         return folder
+    # If folder contains non-ASCII chars, it's UTF-8 and needs IMAP UTF-7 encoding
+    if any(ord(c) > 127 for c in folder):
+        folder = _encode_imap_utf7(folder)
     escaped = folder.replace('\\', '\\\\').replace('"', '\\"')
     return f'"{escaped}"'
 
@@ -211,6 +218,38 @@ class IMAPManager:
         logger.error(f"Failed to move UID {uid} to {to_folder}")
         return False
 
+    def move_emails_bulk(self, uids: list[str], from_folder: str, to_folder: str) -> dict:
+        """Move multiple emails in one batch. Batch COPY by UID sets (50 per call), single EXPUNGE."""
+        if not uids:
+            return {"moved": 0, "failed": 0}
+        self._conn.select(_imap_quote(from_folder))
+        self._conn.create(_imap_quote(to_folder))
+        moved = []
+        failed = 0
+        # Batch COPY: send comma-separated UID sets (chunks of 50) instead of one-by-one
+        chunk_size = 50
+        for i in range(0, len(uids), chunk_size):
+            chunk = uids[i:i + chunk_size]
+            uid_set = ",".join(chunk)
+            status, _ = self._conn.uid("COPY", uid_set, _imap_quote(to_folder))
+            if status == "OK":
+                moved.extend(chunk)
+            else:
+                # Fallback: try individually for this chunk
+                for uid in chunk:
+                    status, _ = self._conn.uid("COPY", uid, _imap_quote(to_folder))
+                    if status == "OK":
+                        moved.append(uid)
+                    else:
+                        failed += 1
+        if moved:
+            # Batch STORE+EXPUNGE in one go
+            uid_set = ",".join(moved)
+            self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+            self._conn.expunge()
+        logger.info(f"Bulk move: {len(moved)} moved to {to_folder}, {failed} failed")
+        return {"moved": len(moved), "failed": failed}
+
     def flag_email(self, uid: str, folder: str, flag: str) -> bool:
         """Add a flag to an email."""
         self._conn.select(_imap_quote(folder))
@@ -258,8 +297,10 @@ class IMAPManager:
             return []
         return data[0].decode().split() if data[0] else []
 
-    def delete_email(self, uid: str, folder: str) -> bool:
-        """Delete an email (move to Trash, or flag as Deleted)."""
+    def _find_trash_folder(self) -> str | None:
+        """Find the Trash folder name, cached per connection."""
+        if hasattr(self, '_trash_cache'):
+            return self._trash_cache
         trash_names = [
             "Trash", "INBOX.Trash", "Deleted", "INBOX.Deleted",
             "Deleted Items", "INBOX.Deleted Items",
@@ -268,15 +309,20 @@ class IMAPManager:
         try:
             folders = self.list_folders()
             folder_names = [f["name"] for f in folders]
-            trash_folder = None
             for t in trash_names:
                 if t in folder_names:
-                    trash_folder = t
-                    break
-            if trash_folder and folder != trash_folder:
-                return self.move_email(uid, folder, trash_folder)
+                    self._trash_cache = t
+                    return t
         except Exception:
             pass
+        self._trash_cache = None
+        return None
+
+    def delete_email(self, uid: str, folder: str) -> bool:
+        """Delete an email (move to Trash, or flag as Deleted)."""
+        trash_folder = self._find_trash_folder()
+        if trash_folder and folder != trash_folder:
+            return self.move_email(uid, folder, trash_folder)
         # Fallback: flag as Deleted
         self._conn.select(_imap_quote(folder))
         status, _ = self._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
@@ -284,6 +330,43 @@ class IMAPManager:
             self._conn.expunge()
             return True
         return False
+
+    def delete_emails_bulk(self, uids: list[str], folder: str) -> dict:
+        """Delete multiple emails in one batch. Uses UID sets for efficiency."""
+        if not uids:
+            return {"deleted": 0, "failed": 0}
+
+        trash_folder = self._find_trash_folder()
+
+        if trash_folder and folder != trash_folder:
+            # Batch move to trash: SELECT once, COPY each, flag all, EXPUNGE once
+            self._conn.select(_imap_quote(folder))
+            self._conn.create(_imap_quote(trash_folder))
+            moved = []
+            failed = 0
+            for uid in uids:
+                status, _ = self._conn.uid("COPY", uid, _imap_quote(trash_folder))
+                if status == "OK":
+                    moved.append(uid)
+                else:
+                    failed += 1
+            if moved:
+                uid_set = ",".join(moved)
+                self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+                self._conn.expunge()
+            logger.info(f"Bulk delete: {len(moved)} moved to trash, {failed} failed")
+            return {"deleted": len(moved), "failed": failed}
+        else:
+            # Already in trash or no trash: batch flag + single EXPUNGE
+            self._conn.select(_imap_quote(folder))
+            uid_set = ",".join(uids)
+            status, _ = self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+            if status == "OK":
+                self._conn.expunge()
+                logger.info(f"Bulk delete: {len(uids)} permanently deleted from {folder}")
+                return {"deleted": len(uids), "failed": 0}
+            logger.error(f"Bulk delete STORE failed for {folder}")
+            return {"deleted": 0, "failed": len(uids)}
 
     def save_draft(self, raw_message: bytes) -> bool:
         """Save a message to the Drafts folder."""
@@ -316,19 +399,26 @@ class IMAPManager:
 
     def save_to_sent(self, raw_message: bytes) -> bool:
         """Save a sent message to the Sent folder."""
-        sent_names = [
-            "Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items",
-            "Sent Messages", "INBOX.Sent Messages",
-            "&BkQGRARJBkUGOw-", "INBOX.&BkQGRARJBkUGOw-",
-        ]
         try:
             folders = self.list_folders()
-            folder_names = [f["name"] for f in folders]
+            # First: find folder with \Sent flag (most reliable)
             sent_folder = None
-            for s in sent_names:
-                if s in folder_names:
-                    sent_folder = s
+            for f in folders:
+                if "\\Sent" in f.get("flags", ""):
+                    sent_folder = f["name"]
                     break
+            # Fallback: try common names
+            if not sent_folder:
+                sent_names = [
+                    "Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items",
+                    "Sent Messages", "INBOX.Sent Messages",
+                    "&AMk-l&AOk-ments envoy&AOk-s",
+                ]
+                folder_names = [f["name"] for f in folders]
+                for s in sent_names:
+                    if s in folder_names:
+                        sent_folder = s
+                        break
             if not sent_folder:
                 sent_folder = "Sent"
                 self._conn.create(_imap_quote(sent_folder))
