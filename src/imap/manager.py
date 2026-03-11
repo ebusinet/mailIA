@@ -42,9 +42,9 @@ class IMAPManager:
 
     def connect(self):
         if self.config.ssl:
-            self._conn = imaplib.IMAP4_SSL(self.config.host, self.config.port)
+            self._conn = imaplib.IMAP4_SSL(self.config.host, self.config.port, timeout=30)
         else:
-            self._conn = imaplib.IMAP4(self.config.host, self.config.port)
+            self._conn = imaplib.IMAP4(self.config.host, self.config.port, timeout=30)
         try:
             self._conn.login(self.config.user, self.config.password)
         except imaplib.IMAP4.error:

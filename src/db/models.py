@@ -1,3 +1,4 @@
+# PERFORMANCE NOTE: Run on DB: CREATE INDEX IF NOT EXISTS idx_local_emails_folder_date ON local_emails(folder_id, date DESC);
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, LargeBinary,

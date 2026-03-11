@@ -2,6 +2,7 @@
 AI Router — resolves which AI provider to use for a given user + context.
 """
 import logging
+import time
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -16,6 +17,9 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+_provider_cache = {}
+_CACHE_TTL = 300  # 5 minutes
+
 
 async def get_llm_for_user(
     db: AsyncSession,
@@ -29,6 +33,11 @@ async def get_llm_for_user(
     2. User's default provider
     3. System fallback (Claude API if key set)
     """
+    cache_key = (user.id, provider_id)
+    cached = _provider_cache.get(cache_key)
+    if cached and time.time() - cached[1] < _CACHE_TTL:
+        return cached[0]
+
     settings = get_settings()
 
     query = select(AIProvider).where(AIProvider.user_id == user.id)
@@ -47,18 +56,24 @@ async def get_llm_for_user(
         provider_config = result.scalar_one_or_none()
 
     if provider_config:
-        return _build_provider(provider_config, user.id)
+        provider = _build_provider(provider_config, user.id)
+        _provider_cache[cache_key] = (provider, time.time())
+        return provider
 
     # Last resort: system-level keys (DB settings first, then .env)
     api_key = await _get_system_api_key(db, "anthropic_api_key") or settings.anthropic_api_key
     if api_key:
         model = await _get_system_setting(db, "default_ai_model") or "claude-sonnet-4-20250514"
-        return ClaudeProvider(api_key=api_key, default_model=model)
+        provider = ClaudeProvider(api_key=api_key, default_model=model)
+        _provider_cache[cache_key] = (provider, time.time())
+        return provider
 
     api_key = await _get_system_api_key(db, "openai_api_key") or settings.openai_api_key
     if api_key:
         model = await _get_system_setting(db, "default_ai_model") or "gpt-4o"
-        return OpenAIProvider(api_key=api_key, default_model=model)
+        provider = OpenAIProvider(api_key=api_key, default_model=model)
+        _provider_cache[cache_key] = (provider, time.time())
+        return provider
 
     raise RuntimeError(f"No AI provider configured for user {user.id} and no system fallback")
 

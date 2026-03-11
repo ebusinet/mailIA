@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MailIA</title>
     <link rel="manifest" href="/static/manifest.json">
-    <script src="/static/tinymce/tinymce.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root { --email-bg: #ffffff; --input-bg: #1e293b; --input-color: #f1f5f9; --input-border: #334155; --input-placeholder: #64748b; --tag-bg: #475569; --tag-color: #f1f5f9; --tag-icon: #94a3b8; --tag-active: #38bdf8; }
@@ -932,9 +931,9 @@
                         <div class="mail-filter-row" style="grid-template-columns:20px auto 1fr 2fr auto">
                             <div></div>
                             <div></div>
-                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-from">
-                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-subject">
-                            <input type="text" placeholder="Filtrer..." oninput="filterMailRows()" id="filter-date">
+                            <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-from">
+                            <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-subject">
+                            <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-date">
                         </div>
                     </div>
                     <div id="explorer-messages" style="flex:1;overflow-y:auto;min-height:0"></div>
@@ -1365,6 +1364,12 @@
 </div>
 
 <script>
+function debounce(fn, ms) {
+    let t;
+    return function(...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); };
+}
+const debouncedFilterMailRows = debounce(() => filterMailRows(), 250);
+
 // Detect base path from URL (/mailia → /mailia/api, / → /api)
 // Exclude /static which is the file-serving path, not a route prefix
 const _rawBase = window.location.pathname.match(/^(\/[^\/]+)/)?.[1] || '';
@@ -1583,13 +1588,15 @@ async function initApp() {
             document.getElementById('tab-status-btn').classList.remove('hidden');
         }
     } catch(e) { logout(); return; }
-    loadRules();
-    await loadAccounts();
-    loadExplorerAccounts();
-    loadAIProviders();
     loadChatState();
-    loadImportJobs();
-    try { contactsCache = await api('/contacts/'); contactsData = contactsCache; } catch(e) {}
+    await Promise.all([
+        loadRules(),
+        loadAccounts(),
+        loadAIProviders(),
+        loadImportJobs(),
+        api('/contacts/').then(c => { contactsCache = c; contactsData = c; }).catch(() => {})
+    ]);
+    loadExplorerAccounts();
 
     // Resume polling for active import job
     const activeJob = localStorage.getItem('mailia_import_job');
@@ -2319,6 +2326,7 @@ async function sendChat() {
         let lastDataTime = Date.now();
         let waitingIndicator = false;
 
+        let pendingRender = false;
         while (true) {
             const readPromise = reader.read();
             const timeoutPromise = new Promise((_, reject) => {
@@ -2355,10 +2363,18 @@ async function sendChat() {
                     const data = JSON.parse(payload);
                     if (data.heartbeat) { lastDataTime = Date.now(); continue; }
                     if (data.error) throw new Error(data.error);
-                    if (data.text && chatId == _activeChatId) {
+                    if (data.text) {
                         fullText += data.text;
-                        typingEl.innerHTML = renderChatMd(fullText);
-                        container.scrollTop = container.scrollHeight;
+                        if (!pendingRender && chatId == _activeChatId) {
+                            pendingRender = true;
+                            requestAnimationFrame(() => {
+                                if (chatId == _activeChatId) {
+                                    typingEl.innerHTML = renderChatMd(fullText);
+                                    container.scrollTop = container.scrollHeight;
+                                }
+                                pendingRender = false;
+                            });
+                        }
                     }
                 } catch(pe) { if (pe.message !== payload) throw pe; }
             }
@@ -3570,7 +3586,18 @@ async function moveToFolder(targetFolder, targetStorage) {
 
 let composeAttachments = [];
 
-function openCompose(prefill) {
+async function ensureTinyMCE() {
+    if (typeof tinymce !== 'undefined') return;
+    return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/static/tinymce/tinymce.min.js';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
+async function openCompose(prefill) {
     prefill = prefill || {};
     document.getElementById('compose-overlay').classList.remove('hidden');
 
@@ -3614,6 +3641,7 @@ function openCompose(prefill) {
     overlay.dataset.references = prefill.references || '';
 
     // Init TinyMCE rich text editor
+    await ensureTinyMCE();
     tinymce.remove('#compose-editor');
     const initialContent = prefill.body_html || (prefill.body ? '<pre>' + esc(prefill.body) + '</pre>' : '');
     const isDark = !document.body.className.match(/theme-(light|solarized|rose|emerald)/);
@@ -3653,7 +3681,7 @@ function toggleComposeExtras() {
 }
 
 function closeCompose() {
-    tinymce.remove('#compose-editor');
+    if (typeof tinymce !== 'undefined') tinymce.remove('#compose-editor');
     document.getElementById('compose-overlay').classList.add('hidden');
     composeAttachments = [];
 }

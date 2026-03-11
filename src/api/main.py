@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts
 from src.config import get_settings
@@ -9,6 +10,8 @@ from src.config import get_settings
 settings = get_settings()
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,

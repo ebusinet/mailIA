@@ -171,7 +171,7 @@ async def chat_stream(
         import asyncio
         chunk_count = 0
         try:
-            chunk_queue = asyncio.Queue()
+            chunk_queue = asyncio.Queue(maxsize=100)
             stream_done = asyncio.Event()
 
             async def _consume_stream():
