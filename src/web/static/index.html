@@ -2399,6 +2399,7 @@ async function sendChat() {
         const STREAM_TIMEOUT = 300000; // 5 min without data = timeout
         let lastDataTime = Date.now();
         let waitingIndicator = false;
+        let lastHeartbeatInfo = null;
 
         let pendingRender = false;
         while (true) {
@@ -2406,18 +2407,28 @@ async function sendChat() {
             const timeoutPromise = new Promise((_, reject) => {
                 const checkInterval = setInterval(() => {
                     const elapsed = Date.now() - lastDataTime;
-                    // Show waiting indicator after 15s of silence
-                    if (elapsed > 15000 && !waitingIndicator && chatId == _activeChatId) {
-                        waitingIndicator = true;
+                    // Show/update waiting indicator after 15s of silence
+                    if (elapsed > 15000 && chatId == _activeChatId) {
+                        let status = '';
+                        if (lastHeartbeatInfo) {
+                            const secs = lastHeartbeatInfo.elapsed || 0;
+                            const mins = Math.floor(secs / 60);
+                            const s = secs % 60;
+                            const timeStr = mins > 0 ? `${mins}m${s.toString().padStart(2,'0')}s` : `${secs}s`;
+                            status = lastHeartbeatInfo.chunks > 0
+                                ? ` (${timeStr} — reponse en cours)`
+                                : ` (${timeStr} — analyse en cours)`;
+                        }
                         const waitMsg = fullText
-                            ? fullText + '\n\n*⏳ L\'IA travaille...*'
-                            : '*⏳ L\'IA travaille (analyse en cours, cela peut prendre un moment)...*';
+                            ? fullText + `\n\n*⏳ L'IA travaille${status}...*`
+                            : `*⏳ L'IA travaille${status}...*`;
                         typingEl.innerHTML = renderChatMd(waitMsg);
                         container.scrollTop = container.scrollHeight;
+                        waitingIndicator = true;
                     }
                     if (elapsed > STREAM_TIMEOUT) {
                         clearInterval(checkInterval);
-                        reject(new Error('Timeout: aucune donnee recue depuis 2 minutes. L\'IA a peut-etre plante. Reessayez.'));
+                        reject(new Error('Timeout: aucune donnee recue depuis 5 minutes. Reessayez.'));
                     }
                 }, 5000);
                 readPromise.then(() => clearInterval(checkInterval)).catch(() => clearInterval(checkInterval));
@@ -2435,7 +2446,7 @@ async function sendChat() {
                 if (payload === '[DONE]') break;
                 try {
                     const data = JSON.parse(payload);
-                    if (data.heartbeat) { lastDataTime = Date.now(); continue; }
+                    if (data.heartbeat) { lastDataTime = Date.now(); lastHeartbeatInfo = data; continue; }
                     if (data.error) throw new Error(data.error);
                     if (data.text) {
                         fullText += data.text;

@@ -185,7 +185,9 @@ async def chat_stream(
 
     async def generate():
         import asyncio
+        import time as _time
         chunk_count = 0
+        stream_start = _time.time()
         try:
             chunk_queue = asyncio.Queue(maxsize=100)
             stream_done = asyncio.Event()
@@ -214,9 +216,10 @@ async def chat_stream(
                     else:
                         yield f"data: {json.dumps({'text': data})}\n\n"
                 except asyncio.TimeoutError:
-                    # Send heartbeat to keep connection alive
-                    logger.debug(f"Stream heartbeat (chunks: {chunk_count})")
-                    yield f"data: {json.dumps({'heartbeat': True})}\n\n"
+                    # Send heartbeat with progress info
+                    elapsed = int(_time.time() - stream_start)
+                    logger.debug(f"Stream heartbeat (chunks: {chunk_count}, elapsed: {elapsed}s)")
+                    yield f"data: {json.dumps({'heartbeat': True, 'chunks': chunk_count, 'elapsed': elapsed})}\n\n"
 
             await task
         except Exception as e:
