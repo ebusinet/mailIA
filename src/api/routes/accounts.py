@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, cast, String
 
 from src.db.session import get_db
 from src.db.models import User, MailAccount, LocalFolder, LocalEmail
@@ -464,6 +464,9 @@ async def list_messages(
     page: int = 0,
     size: int = 50,
     storage: str = Query("imap"),
+    filter_from: str = Query("", description="Filter by sender (substring)"),
+    filter_subject: str = Query("", description="Filter by subject (substring)"),
+    filter_date: str = Query("", description="Filter by date (substring)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -480,13 +483,21 @@ async def list_messages(
         if not local_folder:
             raise HTTPException(status_code=404, detail="Local folder not found")
 
+        local_filters = [LocalEmail.folder_id == local_folder.id]
+        if filter_from:
+            local_filters.append(LocalEmail.from_addr.ilike(f"%{filter_from}%"))
+        if filter_subject:
+            local_filters.append(LocalEmail.subject.ilike(f"%{filter_subject}%"))
+        if filter_date:
+            local_filters.append(cast(LocalEmail.date, String).ilike(f"%{filter_date}%"))
+
         count_result = await db.execute(
-            select(sa_func.count()).where(LocalEmail.folder_id == local_folder.id)
+            select(sa_func.count()).where(*local_filters)
         )
         total = count_result.scalar()
 
         emails_result = await db.execute(
-            select(LocalEmail).where(LocalEmail.folder_id == local_folder.id)
+            select(LocalEmail).where(*local_filters)
             .order_by(LocalEmail.date.desc())
             .offset(page * size).limit(size)
         )
@@ -530,22 +541,28 @@ async def list_messages(
             except (IndexError, ValueError, TypeError):
                 pass
 
+            # Build IMAP SEARCH criteria from q and column filters
+            search_parts = []
             if q.strip():
-                # Parse structured search: from:xxx subject:xxx or plain text
                 import re as _re
                 raw = q.strip()
-                parts = []
-                charset = None
                 for match in _re.finditer(r'(from|subject):(\S+)', raw):
                     field = match.group(1).upper()
                     val = match.group(2).replace('"', '\\"')
-                    parts.append(f'{field} "{val}"')
+                    search_parts.append(f'{field} "{val}"')
                     raw = raw.replace(match.group(0), '')
                 remainder = raw.strip().replace('"', '\\"')
                 if remainder:
-                    parts.append(f'TEXT "{remainder}"')
-                criteria = ' '.join(parts) if parts else 'ALL'
-                # UTF-8 charset for non-ASCII
+                    search_parts.append(f'TEXT "{remainder}"')
+
+            if filter_from:
+                search_parts.append(f'FROM "{filter_from.replace(chr(34), "")}"')
+            if filter_subject:
+                search_parts.append(f'SUBJECT "{filter_subject.replace(chr(34), "")}"')
+
+            if search_parts:
+                criteria = ' '.join(search_parts)
+                charset = None
                 try:
                     criteria.encode('ascii')
                 except UnicodeEncodeError:
@@ -590,9 +607,18 @@ async def list_messages(
                     return _dt.min.replace(tzinfo=None)
 
             uid_dates.sort(key=lambda x: _parse_idate(x[1]), reverse=True)
+
+            # Apply date filter (substring match on formatted date)
+            if filter_date:
+                fd_lower = filter_date.lower()
+                uid_dates = [
+                    (uid, idate) for uid, idate in uid_dates
+                    if fd_lower in _parse_idate(idate).strftime("%Y-%m-%d %H:%M").lower()
+                ]
+
             total = len(uid_dates)
 
-            if not q and exists_count and total != exists_count:
+            if not q and not filter_from and not filter_subject and not filter_date and exists_count and total != exists_count:
                 logger.warning("FETCH returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
 
             # Paginate the date-sorted list

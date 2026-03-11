@@ -2774,6 +2774,14 @@ async function selectFolder(path, storage) {
     explorerSearchQuery = '';
     document.getElementById('explorer-search').value = '';
     document.getElementById('explorer-search-clear').style.display = 'none';
+    ['filter-from','filter-subject','filter-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    _mailSortCol = 'date'; _mailSortAsc = false;
+    document.querySelectorAll('.mail-header-col').forEach(h => {
+        const isDate = h.dataset.sort === 'date';
+        h.classList.toggle('sorted', isDate);
+        const a = h.querySelector('.sort-arrow');
+        if (a) a.textContent = isDate ? '\u25BC' : '';
+    });
     closeReadingPane();
     setCookie('mailia_folder', path);
     setCookie('mailia_storage', storage);
@@ -3109,21 +3117,20 @@ async function loadMessages(page) {
     const msgEl = document.getElementById('explorer-messages');
     msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Chargement...</p>';
     document.getElementById('explorer-folder-name').textContent = folderDisplayName(folder);
-    ['filter-from','filter-subject','filter-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     document.getElementById('explorer-pager').style.display = '';
-    _mailSortCol = 'date'; _mailSortAsc = false;
-    document.querySelectorAll('.mail-header-col').forEach(h => {
-        const isDate = h.dataset.sort === 'date';
-        h.classList.toggle('sorted', isDate);
-        const a = h.querySelector('.sort-arrow');
-        if (a) a.textContent = isDate ? '\u25BC' : '';
-    });
 
     try {
         const params = new URLSearchParams({ folder, page: explorerCurrentPage, size: 50, storage: explorerCurrentStorage });
         if (explorerSearchQuery) params.set('q', explorerSearchQuery);
+        const ff = (document.getElementById('filter-from')?.value || '').trim();
+        const fs = (document.getElementById('filter-subject')?.value || '').trim();
+        const fd = (document.getElementById('filter-date')?.value || '').trim();
+        if (ff) params.set('filter_from', ff);
+        if (fs) params.set('filter_subject', fs);
+        if (fd) params.set('filter_date', fd);
         const data = await api(`/accounts/${accountId}/messages?${params}`);
-        const label = explorerSearchQuery ? `${data.total} resultats` : `${data.total} messages`;
+        const hasFilter = !!(ff || fs || fd);
+        const label = explorerSearchQuery ? `${data.total} resultats` : hasFilter ? `${data.total} filtre(s)` : `${data.total} messages`;
         document.getElementById('explorer-folder-count').textContent = label;
 
         if (!data.messages.length) {
@@ -3373,28 +3380,8 @@ function sortMailColumn(col) {
 }
 
 function filterMailRows() {
-    const ff = (document.getElementById('filter-from')?.value || '').trim().toLowerCase();
-    const fs = (document.getElementById('filter-subject')?.value || '').trim().toLowerCase();
-    const fd = (document.getElementById('filter-date')?.value || '').trim().toLowerCase();
-    const hasFilter = !!(ff || fs || fd);
-    const rows = document.querySelectorAll('#explorer-messages .mail-row');
-    let visible = 0;
-    rows.forEach(row => {
-        const from = (row.querySelector('.mail-from')?.textContent || '').toLowerCase();
-        const subject = (row.querySelector('.mail-subject')?.textContent || '').toLowerCase();
-        const date = (row.querySelector('.mail-date')?.textContent || '').toLowerCase();
-        const match = (!ff || from.includes(ff)) && (!fs || subject.includes(fs)) && (!fd || date.includes(fd));
-        row.style.display = match ? '' : 'none';
-        if (match) visible++;
-    });
-    const pagerEl = document.getElementById('explorer-pager');
-    const countEl = document.getElementById('explorer-folder-count');
-    if (hasFilter) {
-        pagerEl.style.display = 'none';
-        countEl.textContent = visible + ' / ' + rows.length + ' messages';
-    } else {
-        pagerEl.style.display = '';
-    }
+    explorerCurrentPage = 0;
+    loadMessages(0);
 }
 
 // Resize handle for split pane
