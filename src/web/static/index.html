@@ -773,8 +773,14 @@
         .compose-row-inline .compose-row { flex: 1; margin-bottom: 0; }
         @media (max-width: 640px) { .compose-row-inline { flex-direction: column; } .compose-row-inline .compose-row { margin-bottom: 0.2rem; } }
         .attachment-list { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
-        .attachment-chip { background: #334155; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; color: #e2e8f0; display: flex; align-items: center; gap: 0.3rem; }
-        .attachment-chip .remove-att { cursor: pointer; color: #f87171; font-weight: bold; }
+        .attachment-chip { background: #1e293b; border: 1px solid #475569; padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.8rem; color: #f1f5f9; display: inline-flex; align-items: center; gap: 0.3rem; }
+        .attachment-chip .att-name { color: #e2e8f0; }
+        .attachment-chip .att-size { color: #94a3b8; font-size: 0.75rem; }
+        .attachment-chip .remove-att { cursor: pointer; color: #f87171; font-weight: bold; font-size: 0.9rem; }
+        .attachment-chip .remove-att:hover { color: #ef4444; }
+        body.theme-light .attachment-chip { background: #f8fafc; border-color: #cbd5e1; color: #1e293b; }
+        body.theme-light .attachment-chip .att-name { color: #1e293b; }
+        body.theme-light .attachment-chip .att-size { color: #64748b; }
 
         /* Reading modal */
         .reading-meta { margin-bottom: 0.75rem; }
@@ -1250,11 +1256,7 @@
                     <label><input type="checkbox" id="compose-read-receipt"> Accuse lecture</label>
                     <label><input type="checkbox" id="compose-delivery-receipt"> Confirm. livraison</label>
                 </div>
-                <div class="compose-row">
-                    <label>PJ</label>
-                    <input type="file" id="compose-files" multiple onchange="handleFileSelect()" style="font-size:0.8rem">
-                </div>
-                <div class="attachment-list" id="compose-attachments-list" style="margin-left:2.6rem"></div>
+                <input type="file" id="compose-files" multiple onchange="handleFileSelect()" style="display:none">
             </div>
             <div style="padding:0.3rem 0.5rem;display:flex;align-items:center;gap:0.5rem">
                 <button class="btn-sm" onclick="toggleAIWidget('compose')" title="Assistant IA pour rediger" style="font-size:0.85rem;padding:2px 6px">&#x2728;</button>
@@ -1272,11 +1274,15 @@
                 <div id="compose-editor" style="flex:1;min-height:0"></div>
             </div>
         </div>
-        <div class="modal-footer">
+        <div class="modal-footer" style="flex-wrap:wrap">
             <button class="btn-success" onclick="sendComposedEmail()" id="compose-send-btn">Envoyer</button>
             <button class="btn-primary" onclick="saveDraft()" style="font-size:0.85rem">Brouillon</button>
             <button class="btn-sm" onclick="closeCompose()">Annuler</button>
-            <span id="compose-status" style="color:#94a3b8;font-size:0.85rem;margin-left:auto"></span>
+            <div id="compose-drop-zone" onclick="document.getElementById('compose-files').click()" style="margin-left:auto;display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.7rem;border:1px dashed #475569;border-radius:6px;cursor:pointer;font-size:0.8rem;color:#94a3b8;transition:all 0.2s">
+                📎 <span>Joindre des fichiers</span>
+            </div>
+            <span id="compose-status" style="color:#94a3b8;font-size:0.85rem"></span>
+            <div class="attachment-list" id="compose-attachments-list" style="width:100%;margin-top:0.3rem"></div>
         </div>
     </div>
 </div>
@@ -4321,7 +4327,7 @@ function handleFileSelect() {
 
 function renderComposeAttachments() {
     document.getElementById('compose-attachments-list').innerHTML = composeAttachments.map((a, i) =>
-        `<span class="attachment-chip">${esc(a.filename)} (${formatSize(a.size)}) <span class="remove-att" onclick="removeAttachment(${i})">&times;</span></span>`
+        `<span class="attachment-chip">📎 <span class="att-name">${esc(a.filename)}</span> <span class="att-size">(${formatSize(a.size)})</span> <span class="remove-att" onclick="removeAttachment(${i})">&times;</span></span>`
     ).join('');
 }
 
@@ -4338,11 +4344,20 @@ function handleDroppedFiles(files) {
     }
 }
 (function setupComposeDragDrop() {
-    const body = document.querySelector('#compose-overlay .modal-body');
-    if (!body) return;
-    body.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('drag-over'); });
-    body.addEventListener('dragleave', function(e) { e.preventDefault(); this.classList.remove('drag-over'); });
-    body.addEventListener('drop', function(e) { e.preventDefault(); this.classList.remove('drag-over'); if (e.dataTransfer.files.length) handleDroppedFiles(e.dataTransfer.files); });
+    // Drop zone in footer
+    const dz = document.getElementById('compose-drop-zone');
+    if (dz) {
+        dz.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.style.borderColor = '#38bdf8'; this.style.background = 'rgba(56,189,248,0.1)'; this.style.color = '#38bdf8'; });
+        dz.addEventListener('dragleave', function(e) { e.preventDefault(); this.style.borderColor = ''; this.style.background = ''; this.style.color = ''; });
+        dz.addEventListener('drop', function(e) { e.preventDefault(); e.stopPropagation(); this.style.borderColor = ''; this.style.background = ''; this.style.color = ''; if (e.dataTransfer.files.length) handleDroppedFiles(e.dataTransfer.files); });
+    }
+    // Also accept drops on entire compose modal
+    const panel = document.querySelector('#compose-overlay .modal-panel');
+    if (panel) {
+        panel.addEventListener('dragover', function(e) { e.preventDefault(); if (dz) { dz.style.borderColor = '#38bdf8'; dz.style.background = 'rgba(56,189,248,0.1)'; dz.style.color = '#38bdf8'; } });
+        panel.addEventListener('dragleave', function(e) { if (!panel.contains(e.relatedTarget)) { if (dz) { dz.style.borderColor = ''; dz.style.background = ''; dz.style.color = ''; } } });
+        panel.addEventListener('drop', function(e) { e.preventDefault(); if (dz) { dz.style.borderColor = ''; dz.style.background = ''; dz.style.color = ''; } if (e.dataTransfer.files.length) handleDroppedFiles(e.dataTransfer.files); });
+    }
 })();
 
 async function sendComposedEmail() {
