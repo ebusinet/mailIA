@@ -618,6 +618,7 @@
         .chat-msg.assistant .chat-md code { background: #334155; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.85em; }
         .chat-msg .email-link { display: inline-flex; align-items: center; gap: 0.2rem; color: #38bdf8; text-decoration: none; font-size: 0.8rem; cursor: pointer; border-bottom: 1px dashed #38bdf8; }
         .chat-msg .email-link:hover { color: #7dd3fc; border-color: #7dd3fc; }
+        .tool-activity-inline div { line-height:1.6; }
         .chat-thinking-block { margin-bottom: 0.5rem; color: #64748b; font-size: 0.85rem; }
         .chat-thinking-block summary { cursor: pointer; font-style: italic; }
         .chat-thinking-block > div { padding: 0.3rem 0.5rem; border-left: 2px solid #334155; margin-top: 0.3rem; }
@@ -694,7 +695,21 @@
         .icon-flag { color: #ef4444; font-weight: 700; }
         .icon-reply { color: #22c55e; }
         .icon-priority { color: #ef4444; font-weight: bold; }
-        .icon-attach { color: #a78bfa; }
+        .icon-attach { color: #a78bfa; font-size: 0.7rem; }
+
+        /* Folder context menu */
+        .folder-ctx-menu { position: fixed; z-index: 2000; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 0.3rem 0; min-width: 180px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .folder-ctx-item { padding: 0.4rem 0.75rem; cursor: pointer; font-size: 0.8rem; color: #e2e8f0; display: flex; align-items: center; gap: 0.4rem; }
+        .folder-ctx-item:hover { background: #334155; }
+        .folder-ctx-item.danger { color: #f87171; }
+        .folder-ctx-item.danger:hover { background: #7f1d1d; }
+        body.theme-light .folder-ctx-menu { background: #fff; border-color: #cbd5e1; }
+        body.theme-light .folder-ctx-item { color: #1e293b; }
+        body.theme-light .folder-ctx-item:hover { background: #f1f5f9; }
+
+        /* Drag & drop */
+        .folder-item.drag-over { outline: 2px dashed #38bdf8; outline-offset: -2px; background: rgba(56,189,248,0.15) !important; }
+        .mail-row.dragging { opacity: 0.4; }
 
         /* Email toolbar */
         .email-toolbar { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.75rem; padding: 0.5rem; background: #0f172a; border-radius: 6px; align-items: center; }
@@ -994,6 +1009,7 @@
                 <div class="chat-input">
                     <input type="text" id="chat-input" placeholder="Posez une question..." onkeydown="if(event.key==='Enter'&&!event.shiftKey)sendChat()">
                     <button onclick="sendChat()" id="chat-send-btn">Envoyer</button>
+                    <button onclick="stopChat()" id="chat-stop-btn" style="display:none;background:#ef4444;color:#fff;border:none;padding:0.5rem 1rem;border-radius:6px;cursor:pointer;font-weight:bold">Stop</button>
                 </div>
             </div>
         </div>
@@ -2193,7 +2209,7 @@ const WELCOME_HTML = '<div class="chat-msg assistant"><div class="chat-md">Bonjo
 
 function createChat(silent) {
     const id = ++_chatCounter;
-    _chats[id] = { id, title: 'Nouveau chat', history: [], messagesHtml: WELCOME_HTML, providerId: '', abortController: null, taskPlan: null };
+    _chats[id] = { id, title: 'Nouveau chat', history: [], messagesHtml: WELCOME_HTML, providerId: '', abortController: null, taskPlan: null, autoContStalls: 0 };
     if (!silent) {
         switchChat(id);
         saveChatState();
@@ -2314,7 +2330,8 @@ function updateTaskBanner() {
     const banner = document.getElementById('task-resume-banner');
     if (!banner) return;
     const chat = _chats[_activeChatId];
-    if (!chat || !chat.taskPlan || !chat.taskPlan.steps.some(s => !s.done)) {
+    // Don't show if: no plan, all steps done, or streaming is active
+    if (!chat || !chat.taskPlan || !chat.taskPlan.steps.some(s => !s.done) || chat.abortController) {
         banner.style.display = 'none';
         return;
     }
@@ -2330,8 +2347,25 @@ function resumeTask() {
     const planState = chat.taskPlan.steps.map((s, i) =>
         `${i + 1}. [${s.done ? 'x' : ' '}] ${s.label}`
     ).join('\n');
+    // Include recent conversation context so AI knows the scope
+    let contextSummary = '';
+    if (chat.history.length > 0) {
+        // Find the original user request that started the task
+        const userMsgs = chat.history.filter(m => m.role === 'user');
+        if (userMsgs.length > 0) {
+            contextSummary = `\n\nContexte de la demande initiale :\n"${userMsgs[0].content}"`;
+        }
+        // Add last assistant message for recent context (truncated)
+        const lastAssistant = [...chat.history].reverse().find(m => m.role === 'assistant');
+        if (lastAssistant) {
+            const truncated = lastAssistant.content.length > 500
+                ? lastAssistant.content.slice(0, 500) + '...'
+                : lastAssistant.content;
+            contextSummary += `\n\nDerniere reponse IA :\n"${truncated}"`;
+        }
+    }
     const input = document.getElementById('chat-input');
-    input.value = `Reprends la tache en cours. Voici l'etat du plan :\n${planState}\nContinue a partir de la prochaine etape non terminee.`;
+    input.value = `Reprends la tache en cours. Voici l'etat du plan :\n${planState}${contextSummary}\nContinue a partir de la prochaine etape non terminee.`;
     document.getElementById('task-resume-banner').style.display = 'none';
     sendChat();
 }
@@ -2343,14 +2377,70 @@ function dismissTaskBanner() {
     saveChatState();
 }
 
+function _decodeImapUtf7(s) {
+    if (!s || !s.includes('&')) return s;
+    return s.replace(/&([^-]*)-/g, (m, encoded) => {
+        if (!encoded) return '&';
+        try {
+            let b64 = encoded.replace(/,/g, '/');
+            while (b64.length % 4 !== 0) b64 += '=';
+            const bytes = atob(b64);
+            let result = '';
+            for (let i = 0; i + 1 < bytes.length; i += 2) {
+                result += String.fromCharCode((bytes.charCodeAt(i) << 8) | bytes.charCodeAt(i + 1));
+            }
+            return result;
+        } catch(e) { return m; }
+    });
+}
+function _toolLabel(name) {
+    const labels = {
+        search_emails: '🔍 Recherche emails', read_email: '📖 Lecture email',
+        list_accounts: '👤 Liste comptes', list_emails: '📋 Liste emails',
+        move_emails: '📦 Déplacement emails', move_emails_bulk: '📦 Déplacement emails',
+        move_email: '📦 Déplacement email',
+        delete_email: '🗑️ Suppression email', delete_emails_bulk: '🗑️ Suppression emails',
+        search_and_delete_emails: '🗑️ Recherche et suppression',
+        search_and_move_emails: '📦 Recherche et déplacement',
+        organize_emails: '🗂️ Organisation emails',
+        list_folders: '📂 Liste dossiers', create_folder: '📂 Création dossier',
+        get_folders_stats: '📊 Stats dossiers',
+        send_email: '✉️ Envoi email', forward_email: '↗️ Transfert email',
+        reply_to_email: '↩️ Réponse email',
+        get_senders_stats: '📊 Analyse expéditeurs',
+        count_emails: '🔢 Comptage emails',
+        summarize_email: '📝 Résumé email', classify_email: '🏷️ Classification',
+        flag_email: '⭐ Marquage email', save_draft: '📝 Brouillon',
+        semantic_search: '🧠 Recherche sémantique',
+        extract_info: '📋 Extraction infos', find_duplicates_imap_vs_local: '🔄 Détection doublons',
+    };
+    return labels[name] || name.replace(/_/g, ' ');
+}
+function _renderToolLine(ev) {
+    const label = _toolLabel(ev.tool);
+    const args = ev.args ? ` · ${_decodeImapUtf7(ev.args)}` : '';
+    const icon = ev.status === 'running' ? '⏳' : ev.status === 'done' ? '✅' : '❌';
+    return `${icon} ${label}${args}`;
+}
+
+function stopChat() {
+    const chat = _chats[_activeChatId];
+    if (chat && chat.abortController) {
+        chat.abortController.abort();
+        chat.autoContStalls = 99; // prevent auto-continue after stop
+    }
+}
+
 async function sendChat() {
     const input = document.getElementById('chat-input');
     const msg = input.value.trim();
     if (!msg) return;
     input.value = '';
     const btn = document.getElementById('chat-send-btn');
+    const stopBtn = document.getElementById('chat-stop-btn');
     btn.disabled = true;
     btn.textContent = '...';
+    stopBtn.style.display = 'inline-block';
 
     const chatId = _activeChatId;
     const chat = _chats[chatId];
@@ -2396,47 +2486,110 @@ async function sendChat() {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        const STREAM_TIMEOUT = 300000; // 5 min without data = timeout
+        const STREAM_TIMEOUT = 300000;
         let lastDataTime = Date.now();
-        let waitingIndicator = false;
         let lastHeartbeatInfo = null;
+        let toolLog = [];  // all tool events for final render
+        const streamStartTime = Date.now();
+
+        // Interleaved segments: [{type:'text',content:'...'}, {type:'tools',items:[...]}]
+        let segments = [];
+        let currentTextSegment = '';
+        let currentToolSegment = [];
+
+        function _commitText() {
+            if (currentTextSegment.trim()) {
+                segments.push({type: 'text', content: currentTextSegment});
+            }
+            currentTextSegment = '';
+        }
+        function _commitTools() {
+            if (currentToolSegment.length > 0) {
+                // Late tool events: update status in existing segments by ID,
+                // append truly new events to the last tool segment
+                let unmatched = [];
+                for (const ev of currentToolSegment) {
+                    let found = false;
+                    for (const seg of segments) {
+                        if (seg.type !== 'tools') continue;
+                        const idx = seg.items.findIndex(t => t.id === ev.id);
+                        if (idx >= 0) { seg.items[idx] = ev; found = true; break; }
+                    }
+                    if (!found) unmatched.push(ev);
+                }
+                if (unmatched.length > 0) {
+                    let lastToolSeg = null;
+                    for (let i = segments.length - 1; i >= 0; i--) {
+                        if (segments[i].type === 'tools') { lastToolSeg = segments[i]; break; }
+                    }
+                    if (lastToolSeg) lastToolSeg.items.push(...unmatched);
+                    else segments.push({type: 'tools', items: unmatched});
+                }
+            }
+            currentToolSegment = [];
+        }
+
+        function _mergeToolEvents(events) {
+            for (const ev of events) {
+                const idx = toolLog.findIndex(t => t.id === ev.id);
+                if (idx >= 0) { toolLog[idx] = ev; }
+                else { toolLog.push(ev); }
+                // Update current tool segment (for interleaved display)
+                const ci = currentToolSegment.findIndex(t => t.id === ev.id);
+                if (ci >= 0) currentToolSegment[ci] = ev;
+                else currentToolSegment.push(ev);
+            }
+        }
+
+        function _renderToolBlock(items) {
+            const lines = items.map(ev => _renderToolLine(ev));
+            return `<div class="tool-activity-inline" style="margin:8px 0;padding:6px 10px;border-left:3px solid var(--primary);background:var(--hover);border-radius:0 6px 6px 0;font-size:0.85em;opacity:0.85">`
+                + lines.map(l => `<div>${esc(l)}</div>`).join('')
+                + `</div>`;
+        }
+
+        function _renderInterleaved() {
+            if (chatId != _activeChatId) return;
+            let html = '';
+            // Render committed segments
+            for (const seg of segments) {
+                if (seg.type === 'text') html += renderChatMd(seg.content);
+                else html += _renderToolBlock(seg.items);
+            }
+            // Render current in-progress text
+            if (currentTextSegment.trim()) html += renderChatMd(currentTextSegment);
+            // Render current in-progress tools
+            if (currentToolSegment.length > 0) html += _renderToolBlock(currentToolSegment);
+            // Show working indicator if no text has started yet
+            const hasText = segments.some(s => s.type === 'text') || currentTextSegment.trim();
+            if (!hasText) {
+                const elapsed = lastHeartbeatInfo?.elapsed || Math.round((Date.now() - streamStartTime) / 1000);
+                const mins = Math.floor(elapsed / 60);
+                const s = elapsed % 60;
+                const timeStr = elapsed > 0 ? (mins > 0 ? `${mins}m${s.toString().padStart(2,'0')}s` : `${s}s`) : '';
+                html += `<p style="opacity:0.6;font-style:italic">${timeStr ? `⏳ L'IA travaille (${timeStr})...` : `⏳ L'IA travaille...`}</p>`;
+            }
+            typingEl.innerHTML = html;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        const statusTimer = setInterval(() => {
+            if (Date.now() - lastDataTime > 2000) _renderInterleaved();
+        }, 2000);
 
         let pendingRender = false;
+        try {
         while (true) {
             const readPromise = reader.read();
             const timeoutPromise = new Promise((_, reject) => {
-                const checkInterval = setInterval(() => {
-                    const elapsed = Date.now() - lastDataTime;
-                    // Show/update waiting indicator after 15s of silence
-                    if (elapsed > 15000 && chatId == _activeChatId) {
-                        let status = '';
-                        if (lastHeartbeatInfo) {
-                            const secs = lastHeartbeatInfo.elapsed || 0;
-                            const mins = Math.floor(secs / 60);
-                            const s = secs % 60;
-                            const timeStr = mins > 0 ? `${mins}m${s.toString().padStart(2,'0')}s` : `${secs}s`;
-                            status = lastHeartbeatInfo.chunks > 0
-                                ? ` (${timeStr} — reponse en cours)`
-                                : ` (${timeStr} — analyse en cours)`;
-                        }
-                        const waitMsg = fullText
-                            ? fullText + `\n\n*⏳ L'IA travaille${status}...*`
-                            : `*⏳ L'IA travaille${status}...*`;
-                        typingEl.innerHTML = renderChatMd(waitMsg);
-                        container.scrollTop = container.scrollHeight;
-                        waitingIndicator = true;
-                    }
-                    if (elapsed > STREAM_TIMEOUT) {
-                        clearInterval(checkInterval);
-                        reject(new Error('Timeout: aucune donnee recue depuis 5 minutes. Reessayez.'));
-                    }
-                }, 5000);
-                readPromise.then(() => clearInterval(checkInterval)).catch(() => clearInterval(checkInterval));
+                const tid = setTimeout(() => {
+                    reject(new Error('Timeout: aucune donnee recue depuis 5 minutes. Reessayez.'));
+                }, STREAM_TIMEOUT);
+                readPromise.then(() => clearTimeout(tid)).catch(() => clearTimeout(tid));
             });
             const { done, value } = await Promise.race([readPromise, timeoutPromise]);
             if (done) break;
             lastDataTime = Date.now();
-            waitingIndicator = false;
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop();
@@ -2446,17 +2599,35 @@ async function sendChat() {
                 if (payload === '[DONE]') break;
                 try {
                     const data = JSON.parse(payload);
-                    if (data.heartbeat) { lastDataTime = Date.now(); lastHeartbeatInfo = data; continue; }
+                    if (data.heartbeat) {
+                        lastDataTime = Date.now();
+                        lastHeartbeatInfo = data;
+                        if (data.tools?.length) { _mergeToolEvents(data.tools); _renderInterleaved(); }
+                        continue;
+                    }
+                    if (data.tools) {
+                        lastDataTime = Date.now();
+                        // New tools arrived — commit any pending text before showing tools
+                        if (currentTextSegment.trim()) _commitText();
+                        _mergeToolEvents(data.tools);
+                        _renderInterleaved();
+                        continue;
+                    }
+                    if (data.progress) {
+                        lastDataTime = Date.now();
+                        _renderInterleaved();
+                        continue;
+                    }
                     if (data.error) throw new Error(data.error);
                     if (data.text) {
+                        // New text arrived — commit any pending tools before continuing text
+                        if (currentToolSegment.length > 0) _commitTools();
                         fullText += data.text;
+                        currentTextSegment += data.text;
                         if (!pendingRender && chatId == _activeChatId) {
                             pendingRender = true;
                             requestAnimationFrame(() => {
-                                if (chatId == _activeChatId) {
-                                    typingEl.innerHTML = renderChatMd(fullText);
-                                    container.scrollTop = container.scrollHeight;
-                                }
+                                _renderInterleaved();
                                 pendingRender = false;
                             });
                         }
@@ -2464,21 +2635,62 @@ async function sendChat() {
                 } catch(pe) { if (pe.message !== payload) throw pe; }
             }
         }
+        } finally { clearInterval(statusTimer); }
+
+        // Commit remaining segments
+        _commitText();
+        _commitTools();
 
         if (!fullText) {
             fullText = '*Aucune réponse reçue du serveur. Réessayez.*';
         }
         if (chatId == _activeChatId) {
             typingEl.removeAttribute('id');
-            typingEl.innerHTML = renderChatMd(fullText);
+            let finalHtml = '';
+            for (const seg of segments) {
+                if (seg.type === 'text') finalHtml += renderChatMd(seg.content);
+                else finalHtml += _renderToolBlock(seg.items);
+            }
+            if (!finalHtml.trim()) finalHtml = renderChatMd(fullText || '*Aucune réponse reçue du serveur. Réessayez.*');
+            typingEl.innerHTML = finalHtml;
         }
         chat.history.push({ role: 'user', content: msg });
         chat.history.push({ role: 'assistant', content: fullText });
         if (chat.history.length > 20) chat.history = chat.history.slice(-20);
         const plan = parseTaskPlan(fullText);
         if (plan) chat.taskPlan = plan;
-        updateTaskBanner();
+        // Auto-continue: if task plan has pending steps, keep going
+        if (plan && plan.steps.some(s => !s.done)) {
+            const done = plan.steps.filter(s => s.done).length;
+            const total = plan.steps.length;
+            // Track progress to detect stalls (no advancement = stall)
+            const prevDone = chat._lastAutoContinueDone || 0;
+            if (done > prevDone) chat.autoContStalls = 0;
+            else chat.autoContStalls = (chat.autoContStalls || 0) + 1;
+            chat._lastAutoContinueDone = done;
+            if (chat.autoContStalls < 3) {
+                setTimeout(() => {
+                    if (chat.abortController) return;
+                    const input = document.getElementById('chat-input');
+                    input.value = `Continue (${done}/${total} terminées). Exécute la prochaine étape du plan.`;
+                    const ctr = document.getElementById('chat-messages');
+                    ctr.innerHTML += `<div class="chat-msg system" style="color:#38bdf8;font-style:italic;font-size:0.85em">\u23e9 Continuation automatique (${done}/${total})...</div>`;
+                    ctr.scrollTop = ctr.scrollHeight;
+                    sendChat();
+                }, 1500);
+            } else {
+                updateTaskBanner();
+            }
+        }
     } catch(e) {
+        // Save history even on abort so context is preserved for next message
+        if (e.name === 'AbortError' && fullText) {
+            chat.history.push({ role: 'user', content: msg });
+            chat.history.push({ role: 'assistant', content: fullText + '\n\n*(réponse interrompue)*' });
+            if (chat.history.length > 20) chat.history = chat.history.slice(-20);
+            const plan = parseTaskPlan(fullText);
+            if (plan) chat.taskPlan = plan;
+        }
         if (e.name !== 'AbortError' && chatId == _activeChatId) {
             typingEl.removeAttribute('id');
             let userMsg = e.message;
@@ -2505,6 +2717,7 @@ async function sendChat() {
         }
         btn.disabled = false;
         btn.textContent = 'Envoyer';
+        stopBtn.style.display = 'none';
         container.scrollTop = container.scrollHeight;
         saveChatState();
     }
@@ -2717,6 +2930,14 @@ function folderDisplayName(path) {
     const lf = explorerLocalFoldersCache.find(x => x.path === path);
     return lf ? lf.name : path;
 }
+function _isSentFolder(path) {
+    if (!path) return false;
+    const name = folderDisplayName(path).toLowerCase();
+    const p = path.toLowerCase();
+    const sentNames = ['sent', 'inbox.sent', 'sent messages', 'sent items',
+        'éléments envoyés', 'elements envoyes', 'messages envoyés', 'envoyés', 'envoyes'];
+    return sentNames.some(s => p === s || p.endsWith('.' + s) || name === s || name.includes('envoy'));
+}
 let currentEmailData = null;
 let currentEmailHtml = '';
 
@@ -2793,9 +3014,9 @@ function renderFolderTree(folders) {
         const noselect = f.noselect;
         html += '<div>';
         if (noselect) {
-            html += `<div class="folder-item" data-storage="imap" style="color:#64748b;cursor:default" id="${fid}">`;
+            html += `<div class="folder-item" data-storage="imap" style="color:#64748b;cursor:default" id="${fid}" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         } else {
-            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}">`;
+            html += `<div class="folder-item" data-storage="imap" data-path="${escAttr(f.path)}" onclick="selectFolder(this.dataset.path, 'imap')" id="${fid}" oncontextmenu="_onFolderCtx(event, this)" ondragover="_onFolderDragOver(event)" ondragleave="_onFolderDragLeave(event)" ondrop="_onFolderDrop(event, this)">`;
         }
         if (hasChildren) html += `<span class="folder-toggle" onclick="event.stopPropagation();toggleFolder('${fid}c')">&#9654;</span> `;
         else html += '<span class="folder-toggle"></span> ';
@@ -2848,6 +3069,100 @@ function toggleFolder(childrenId) {
     el.style.display = visible ? 'none' : 'block';
     const toggle = el.previousElementSibling?.querySelector('.folder-toggle');
     if (toggle) toggle.innerHTML = visible ? '&#9654;' : '&#9660;';
+}
+
+// --- Folder context menu ---
+function _onFolderCtx(e, el) {
+    e.preventDefault();
+    e.stopPropagation();
+    _closeFolderCtx();
+    const path = el.dataset.path || '';
+    const storage = el.dataset.storage || 'imap';
+    if (storage !== 'imap') return;
+    const menu = document.createElement('div');
+    menu.className = 'folder-ctx-menu';
+    menu.id = 'folder-ctx-menu';
+    menu.innerHTML = `
+        <div class="folder-ctx-item" onclick="_ctxCreateSubfolder('${escAttr(path)}')">📁 Nouveau sous-dossier</div>
+        ${path ? `<div class="folder-ctx-item danger" onclick="_ctxDeleteFolder('${escAttr(path)}')">🗑️ Supprimer ce dossier</div>` : ''}
+    `;
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    document.body.appendChild(menu);
+    // Adjust if off-screen
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+    setTimeout(() => document.addEventListener('click', _closeFolderCtx, { once: true }), 0);
+}
+function _closeFolderCtx() {
+    const m = document.getElementById('folder-ctx-menu');
+    if (m) m.remove();
+}
+async function _ctxCreateSubfolder(parentPath) {
+    _closeFolderCtx();
+    const name = prompt('Nom du sous-dossier :');
+    if (!name || !name.trim()) return;
+    const fullPath = parentPath ? parentPath + '/' + name.trim() : name.trim();
+    try {
+        const accountId = document.getElementById('explorer-account').value;
+        await api(`/accounts/${accountId}/create-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_name: fullPath }) });
+        await loadFolders();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+async function _ctxDeleteFolder(path) {
+    _closeFolderCtx();
+    const accountId = document.getElementById('explorer-account').value;
+    try {
+        const data = await api(`/accounts/${accountId}/messages?folder=${encodeURIComponent(path)}&page=0&size=1`);
+        const count = data.total || 0;
+        let msg = `Supprimer le dossier "${path}" ?`;
+        if (count > 0) msg += `\n\n⚠️ Ce dossier contient ${count} email(s) qui seront supprimés.`;
+        if (!confirm(msg)) return;
+        await api(`/accounts/${accountId}/delete-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_name: path }) });
+        await loadFolders();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+
+// --- Drag & drop: emails → folders ---
+function _onMailDragStart(e) {
+    const row = e.target.closest('.mail-row');
+    if (!row) return;
+    // Collect checked UIDs or just this one
+    const checked = _getSelectedUids();
+    const uids = checked.length > 0 && checked.includes(row.dataset.uid) ? checked : [row.dataset.uid];
+    e.dataTransfer.setData('text/plain', JSON.stringify({ uids, fromFolder: explorerCurrentFolder, storage: explorerCurrentStorage }));
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('dragging');
+    setTimeout(() => row.classList.remove('dragging'), 200);
+}
+function _onFolderDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drag-over');
+}
+function _onFolderDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+}
+async function _onFolderDrop(e, folderEl) {
+    e.preventDefault();
+    folderEl.classList.remove('drag-over');
+    const targetPath = folderEl.dataset.path;
+    if (!targetPath) return;
+    try {
+        const payload = JSON.parse(e.dataTransfer.getData('text/plain'));
+        if (!payload.uids || !payload.uids.length) return;
+        if (payload.fromFolder === targetPath) return;
+        const accountId = document.getElementById('explorer-account').value;
+        const promises = payload.uids.map(uid =>
+            api(`/accounts/${accountId}/message/${uid}/move?folder=${encodeURIComponent(payload.fromFolder)}&storage=${payload.storage || 'imap'}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_folder: targetPath })
+            })
+        );
+        await Promise.all(promises);
+        loadMessages(explorerCurrentPage);
+    } catch(err) { console.error('Drop move failed:', err); }
 }
 
 async function selectFolder(path, storage) {
@@ -3035,10 +3350,14 @@ async function bulkDelete() {
     const uids = _getSelectedUids();
     if (!uids.length) return;
     if (!confirm('Supprimer ' + uids.length + ' email(s) ?')) return;
-    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
-    for (const uid of uids) {
-        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}?${params}`, { method: 'DELETE' }); } catch {}
-    }
+    const params = new URLSearchParams({ storage: explorerCurrentStorage });
+    try {
+        await api(`/accounts/${explorerCurrentAccount}/delete-bulk?${params}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uids, folder: explorerCurrentFolder }),
+        });
+    } catch (e) { console.error('Bulk delete error:', e); }
     clearSelection();
     await loadMessages();
 }
@@ -3213,13 +3532,18 @@ async function loadMessages(page) {
         const ff = (document.getElementById('filter-from')?.value || '').trim();
         const fs = (document.getElementById('filter-subject')?.value || '').trim();
         const fd = (document.getElementById('filter-date')?.value || '').trim();
-        if (ff) params.set('filter_from', ff);
+        if (ff) params.set(_isSentFolder(folder) ? 'filter_to' : 'filter_from', ff);
         if (fs) params.set('filter_subject', fs);
         if (fd) params.set('filter_date', fd);
         const data = await api(`/accounts/${accountId}/messages?${params}`);
         const hasFilter = !!(ff || fs || fd);
         const label = explorerSearchQuery ? `${data.total} resultats` : hasFilter ? `${data.total} filtre(s)` : `${data.total} messages`;
         document.getElementById('explorer-folder-count').textContent = label;
+
+        // Switch "De" / "À" header for sent folders
+        const isSent = _isSentFolder(folder);
+        const fromHeader = document.querySelector('#mail-list-headers [data-sort="from"]');
+        if (fromHeader) fromHeader.innerHTML = (isSent ? 'À' : 'De') + ' <span class="sort-arrow"></span>';
 
         if (!data.messages.length) {
             msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Dossier vide</p>';
@@ -3235,11 +3559,13 @@ async function loadMessages(page) {
                 if (isPinned) icons += '<span class="icon-pin" title="Epingle"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z"/></svg></span>';
                 if (m.flagged) icons += '<span class="icon-flag" title="Important">!</span>';
                 if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
+                if (m.has_attachments) icons += '<span class="icon-attach" title="Piece jointe">&#x1F4CE;</span>';
                 const flagPrefix = m.flagged ? '<span style="color:#ef4444;font-weight:bold" title="Important">! </span>' : '';
-                return `<div class="mail-row ${m.seen ? '' : 'unread'} ${isPinned ? 'pinned' : ''}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}" data-pinned="${isPinned}" style="grid-template-columns:20px auto 1fr 2fr auto">
+                const personCol = isSent ? esc(m.to || '') : esc(m.from);
+                return `<div class="mail-row ${m.seen ? '' : 'unread'} ${isPinned ? 'pinned' : ''}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}" data-pinned="${isPinned}" draggable="true" ondragstart="_onMailDragStart(event)" style="grid-template-columns:20px auto 1fr 2fr auto">
                     <input type="checkbox" class="mail-row-cb" onclick="event.stopPropagation();onRowCheckChange()" data-uid="${m.uid}">
                     <div class="mail-icons">${icons}</div>
-                    <div class="mail-from">${esc(m.from)}</div>
+                    <div class="mail-from">${personCol}</div>
                     <div class="mail-subject">${flagPrefix}${esc(m.subject) || '<em style="color:#64748b">(sans sujet)</em>'}</div>
                     <div class="mail-date">${esc(m.date)}</div>
                 </div>`;

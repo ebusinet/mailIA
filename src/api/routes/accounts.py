@@ -98,6 +98,11 @@ class MoveRequest(BaseModel):
     target_folder: str
 
 
+class BulkDeleteRequest(BaseModel):
+    uids: list[str]
+    folder: str
+
+
 # ---------------------------------------------------------------------------
 # Account CRUD
 # ---------------------------------------------------------------------------
@@ -465,6 +470,7 @@ async def list_messages(
     size: int = 50,
     storage: str = Query("imap"),
     filter_from: str = Query("", description="Filter by sender (substring)"),
+    filter_to: str = Query("", description="Filter by recipient (substring)"),
     filter_subject: str = Query("", description="Filter by subject (substring)"),
     filter_date: str = Query("", description="Filter by date (substring)"),
     user: User = Depends(get_current_user),
@@ -486,6 +492,8 @@ async def list_messages(
         local_filters = [LocalEmail.folder_id == local_folder.id]
         if filter_from:
             local_filters.append(LocalEmail.from_addr.ilike(f"%{filter_from}%"))
+        if filter_to:
+            local_filters.append(LocalEmail.to_addr.ilike(f"%{filter_to}%"))
         if filter_subject:
             local_filters.append(LocalEmail.subject.ilike(f"%{filter_subject}%"))
         if filter_date:
@@ -508,11 +516,13 @@ async def list_messages(
             messages.append({
                 "uid": f"L{em.id}",
                 "from": em.from_addr or "",
+                "to": em.to_addr or "",
                 "subject": em.subject or "",
                 "date": em.date.strftime("%Y-%m-%d %H:%M") if em.date else "",
                 "seen": em.seen,
                 "flagged": em.flagged,
                 "answered": em.answered,
+                "has_attachments": em.has_attachments,
             })
         return {"folder": folder, "total": total, "page": page, "size": size, "messages": messages, "storage": "local"}
 
@@ -557,6 +567,8 @@ async def list_messages(
 
             if filter_from:
                 search_parts.append(f'FROM "{filter_from.replace(chr(34), "")}"')
+            if filter_to:
+                search_parts.append(f'TO "{filter_to.replace(chr(34), "")}"')
             if filter_subject:
                 search_parts.append(f'SUBJECT "{filter_subject.replace(chr(34), "")}"')
 
@@ -618,7 +630,7 @@ async def list_messages(
 
             total = len(uid_dates)
 
-            if not q and not filter_from and not filter_subject and not filter_date and exists_count and total != exists_count:
+            if not q and not filter_from and not filter_to and not filter_subject and not filter_date and exists_count and total != exists_count:
                 logger.warning("FETCH returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
 
             # Paginate the date-sorted list
@@ -631,7 +643,7 @@ async def list_messages(
             messages = []
             if page_uids:
                 uid_range = ",".join(page_uids)
-                status, data = conn.uid("FETCH", uid_range, "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
+                status, data = conn.uid("FETCH", uid_range, "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
                 if status == "OK" and data:
                     i = 0
                     while i < len(data):
@@ -651,6 +663,7 @@ async def list_messages(
 
                             msg = email_mod.message_from_bytes(header_bytes)
                             from_addr = _decode_header(msg.get("From", ""))
+                            to_addr = _decode_header(msg.get("To", ""))
                             subject = _decode_header(msg.get("Subject", ""))
 
                             # Use INTERNALDATE for display (matches webmail order)
@@ -666,15 +679,18 @@ async def list_messages(
                             seen = "\\Seen" in flags_str
                             flagged = "\\Flagged" in flags_str
                             answered = "\\Answered" in flags_str
+                            has_att = 'attachment' in meta_line.lower() or '"attachment"' in meta_line.lower()
 
                             messages.append({
                                 "uid": uid,
                                 "from": from_addr,
+                                "to": to_addr,
                                 "subject": subject,
                                 "date": date_str,
                                 "seen": seen,
                                 "flagged": flagged,
                                 "answered": answered,
+                                "has_attachments": has_att,
                             })
                         i += 1
 
@@ -770,6 +786,7 @@ async def search_multi_folders(
                                 flags_str = flags_match.group(1)
                             msg = email_mod.message_from_bytes(header_bytes)
                             from_addr = _decode_header(msg.get("From", ""))
+                            to_addr = _decode_header(msg.get("To", ""))
                             subject = _decode_header(msg.get("Subject", ""))
                             date_raw = msg.get("Date", "")
                             date_str = ""
@@ -786,6 +803,7 @@ async def search_multi_folders(
                                 "folder": folder,
                                 "folder_display": _decode_imap_utf7(folder),
                                 "from": from_addr,
+                                "to": to_addr,
                                 "subject": subject,
                                 "date": date_str,
                                 "seen": seen,
@@ -1285,6 +1303,43 @@ async def delete_message(
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
 
     return {"status": "deleted"}
+
+
+@router.post("/{account_id}/delete-bulk")
+async def delete_bulk(
+    account_id: int,
+    req: BulkDeleteRequest,
+    storage: str = Query("imap"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete multiple emails in one batch (single IMAP connection)."""
+    if storage == "local":
+        deleted = 0
+        for uid in req.uids:
+            email_id = int(uid.replace("L", ""))
+            result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
+            em = result.scalar_one_or_none()
+            if em:
+                await db.delete(em)
+                deleted += 1
+        await db.commit()
+        return {"deleted": deleted, "failed": len(req.uids) - deleted}
+
+    account = await _get_account(account_id, user, db)
+    from src.imap.manager import IMAPManager, IMAPConfig
+    from src.security import decrypt_value as _dec
+    config = IMAPConfig(
+        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+        user=account.imap_user, password=_dec(account.imap_password_encrypted),
+    )
+    try:
+        with IMAPManager(config) as imap:
+            result = imap.delete_emails_bulk(req.uids, req.folder)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+
+    return result
 
 
 @router.get("/{account_id}/message/{uid}/attachment/{index}")
@@ -2153,15 +2208,16 @@ def _build_folder_tree(folders: list[dict]) -> list[dict]:
                 node[part] = {}
             node = node[part]
 
-    def _to_list(d: dict, prefix: str = "") -> list[dict]:
+    def _to_list(d: dict, prefix: str = "", display_prefix: str = "") -> list[dict]:
         result = []
         for name, children in sorted(d.items()):
             tree_path = f"{prefix}{sep}{name}" if prefix else name
             display = segment_display.get(name, _decode_imap_utf7(name))
-            item = {"name": display, "path": tree_path}
+            display_path = f"{display_prefix}{sep}{display}" if display_prefix else display
+            item = {"name": display, "path": tree_path, "display_path": display_path}
             if tree_path not in real_folders:
                 item["noselect"] = True
-            child_list = _to_list(children, tree_path)
+            child_list = _to_list(children, tree_path, display_path)
             if child_list:
                 item["children"] = child_list
             result.append(item)

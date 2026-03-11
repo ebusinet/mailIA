@@ -133,12 +133,24 @@ def _summarize_args(tool_name: str, args: dict) -> str:
     """Short human-readable summary of tool arguments."""
     if not args:
         return ""
+    # Folder path tools (create_folder, delete_folder)
+    if "path" in args:
+        return args["path"]
+    if "folder_name" in args and "account_id" in args and len(args) <= 2:
+        return args["folder_name"]
+    # Rules-based organize
+    if "rules" in args:
+        rules = args["rules"]
+        count = len(rules) if isinstance(rules, list) else "?"
+        return f"{args.get('folder', '?')} → {count} règles"
     if "folder" in args and "account_id" in args:
         parts = [args.get("folder", "")]
+        if "target_folder" in args:
+            parts.append(f"→ {args['target_folder']}")
         if "query" in args:
             parts.append(f'"{args["query"][:40]}"')
         if "imap_criteria" in args:
-            parts.append(args["imap_criteria"][:50])
+            parts.append(args["imap_criteria"][:80])
         if "uids" in args:
             uids = args["uids"]
             count = len(uids) if isinstance(uids, list) else str(uids).count(",") + 1
@@ -146,7 +158,7 @@ def _summarize_args(tool_name: str, args: dict) -> str:
         return " · ".join(parts)
     if "query" in args:
         return f'"{args["query"][:50]}"'
-    return ", ".join(f"{k}={str(v)[:30]}" for k, v in list(args.items())[:3])
+    return ", ".join(f"{k}={str(v)[:50]}" for k, v in list(args.items())[:3])
 
 
 mcp.add_middleware(ToolActivityMiddleware())

@@ -184,10 +184,14 @@ class IMAPManager:
 
     def create_folder(self, folder: str) -> bool:
         """Create a new IMAP folder and subscribe to it."""
-        status, _ = self._conn.create(_imap_quote(folder))
+        status, data = self._conn.create(_imap_quote(folder))
         if status == "OK":
             self._conn.subscribe(_imap_quote(folder))
             logger.info(f"Created and subscribed folder: {folder}")
+            return True
+        resp = str(data) if data else ""
+        if "ALREADYEXISTS" in resp or "already exists" in resp.lower():
+            logger.debug(f"Folder already exists: {folder}")
             return True
         logger.error(f"Failed to create folder: {folder}")
         return False
