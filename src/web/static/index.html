@@ -621,6 +621,12 @@
         .chat-thinking-block { margin-bottom: 0.5rem; color: #64748b; font-size: 0.85rem; }
         .chat-thinking-block summary { cursor: pointer; font-style: italic; }
         .chat-thinking-block > div { padding: 0.3rem 0.5rem; border-left: 2px solid #334155; margin-top: 0.3rem; }
+        .task-resume-banner { display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:#1e3a5f; border:1px solid #38bdf8; border-radius:8px; margin-bottom:0.5rem; font-size:0.85rem; color:#e2e8f0; }
+        .task-resume-banner span { flex:1; }
+        .task-plan-block { background:#172554; border:1px solid #38bdf8; border-radius:8px; padding:0.75rem; margin:0.5rem 0; font-size:0.85rem; color:#e2e8f0; }
+        .task-plan-block strong { color:#38bdf8; display:block; margin-bottom:0.3rem; }
+        .task-plan-block .step-done { color:#4ade80; text-decoration:line-through; opacity:0.8; padding:2px 0; }
+        .task-plan-block .step-pending { color:#f8fafc; padding:2px 0; }
         .chat-typing { display: flex; gap: 4px; padding: 0.5rem 0; }
         .chat-typing span { width: 6px; height: 6px; background: #64748b; border-radius: 50%; animation: chatBounce 1.4s ease-in-out infinite; }
         .chat-typing span:nth-child(2) { animation-delay: 0.2s; }
@@ -976,6 +982,11 @@
                     <select id="chat-provider" class="input-field" style="min-width:180px;font-size:0.8rem;padding:0.3rem 0.5rem" onchange="onChatProviderChange()">
                         <option value="">Par defaut</option>
                     </select>
+                </div>
+                <div id="task-resume-banner" class="task-resume-banner" style="display:none">
+                    <span id="task-resume-text"></span>
+                    <button onclick="resumeTask()" class="btn-sm" style="background:#38bdf8;color:#0f172a;font-weight:bold">Reprendre</button>
+                    <button onclick="dismissTaskBanner()" class="btn-sm" style="background:transparent;color:#94a3b8">Ignorer</button>
                 </div>
                 <div class="chat-messages" id="chat-messages">
                     <div class="chat-msg assistant"><div class="chat-md">Bonjour ! Je suis MailIA. Posez-moi une question sur vos emails.</div></div>
@@ -2082,6 +2093,20 @@ async function loadAIProviders() {
 function renderChatMd(text) {
     if (typeof marked !== 'undefined') {
         marked.setOptions({ breaks: true, gfm: true });
+        // Extract [[task-plan]] blocks BEFORE markdown parsing
+        const taskPlanBlocks = [];
+        text = text.replace(/\[\[task-plan\]\]([\s\S]*?)\[\[\/task-plan\]\]/g, (_, content) => {
+            const lines = content.trim().split('\n').map(line => {
+                const m = line.match(/^\d+\.\s*\[([ xX])\]\s*(.+)/);
+                if (!m) return '';
+                const cls = m[1] !== ' ' ? 'step-done' : 'step-pending';
+                const icon = m[1] !== ' ' ? '&#x2705;' : '&#x2B1C;';
+                return `<div class="${cls}">${icon} ${esc(m[2].trim())}</div>`;
+            }).filter(Boolean).join('');
+            const placeholder = `XXTASKPLANX${taskPlanBlocks.length}XX`;
+            taskPlanBlocks.push(`<div class="task-plan-block"><strong>Plan de tache</strong>${lines}</div>`);
+            return placeholder;
+        });
         // Split thinking vs answer: thinking = text before first markdown header
         const headerIdx = text.search(/^#{1,3}\s/m);
         let thinkingHtml = '', answerHtml = '';
@@ -2096,6 +2121,10 @@ function renderChatMd(text) {
             answerHtml = marked.parse(text);
         }
         let html = thinkingHtml + answerHtml;
+        // Restore task plan blocks
+        taskPlanBlocks.forEach((block, i) => {
+            html = html.replace(`XXTASKPLANX${i}XX`, block);
+        });
         // Unescape HTML entities from marked output
         function unescHtml(s) { const el = document.createElement('span'); el.innerHTML = s; return el.textContent; }
         // Convert [[email:ACCOUNT_ID:FOLDER:UID]] to clickable links (use data attrs to avoid & issues in onclick)
@@ -2164,7 +2193,7 @@ const WELCOME_HTML = '<div class="chat-msg assistant"><div class="chat-md">Bonjo
 
 function createChat(silent) {
     const id = ++_chatCounter;
-    _chats[id] = { id, title: 'Nouveau chat', history: [], messagesHtml: WELCOME_HTML, providerId: '', abortController: null };
+    _chats[id] = { id, title: 'Nouveau chat', history: [], messagesHtml: WELCOME_HTML, providerId: '', abortController: null, taskPlan: null };
     if (!silent) {
         switchChat(id);
         saveChatState();
@@ -2198,6 +2227,7 @@ function switchChat(chatId) {
     document.getElementById('chat-messages').innerHTML = chat.messagesHtml;
     document.getElementById('chat-provider').value = chat.providerId || '';
     renderChatTabs();
+    updateTaskBanner();
     const container = document.getElementById('chat-messages');
     container.scrollTop = container.scrollHeight;
 }
@@ -2237,7 +2267,7 @@ function saveChatState() {
     try {
         const data = { chats: {}, activeChatId: _activeChatId, counter: _chatCounter };
         for (const [id, c] of Object.entries(_chats)) {
-            data.chats[id] = { id: c.id, title: c.title, history: c.history, messagesHtml: c.messagesHtml, providerId: c.providerId };
+            data.chats[id] = { id: c.id, title: c.title, history: c.history, messagesHtml: c.messagesHtml, providerId: c.providerId, taskPlan: c.taskPlan || null };
         }
         const json = JSON.stringify(data);
         if (json.length < 2_000_000) localStorage.setItem('mailia_chats', json);
@@ -2251,7 +2281,7 @@ function loadChatState() {
             const data = JSON.parse(raw);
             _chatCounter = data.counter || 0;
             for (const [id, c] of Object.entries(data.chats || {})) {
-                _chats[id] = { ...c, abortController: null };
+                _chats[id] = { ...c, abortController: null, taskPlan: c.taskPlan || null };
                 // Clean up stale typing indicators from interrupted streams
                 if (c.messagesHtml && c.messagesHtml.includes('id="typing"')) {
                     _chats[id].messagesHtml = c.messagesHtml
@@ -2267,6 +2297,50 @@ function loadChatState() {
     if (!Object.keys(_chats).length) createChat(true);
     if (!_activeChatId) _activeChatId = Object.keys(_chats)[0];
     switchChat(_activeChatId);
+}
+
+function parseTaskPlan(text) {
+    const match = text.match(/\[\[task-plan\]\]([\s\S]*?)\[\[\/task-plan\]\]/);
+    if (!match) return null;
+    const steps = [];
+    for (const line of match[1].trim().split('\n')) {
+        const m = line.match(/^\d+\.\s*\[([ xX])\]\s*(.+)/);
+        if (m) steps.push({ done: m[1] !== ' ', label: m[2].trim() });
+    }
+    return steps.length ? { steps, raw: match[1].trim() } : null;
+}
+
+function updateTaskBanner() {
+    const banner = document.getElementById('task-resume-banner');
+    if (!banner) return;
+    const chat = _chats[_activeChatId];
+    if (!chat || !chat.taskPlan || !chat.taskPlan.steps.some(s => !s.done)) {
+        banner.style.display = 'none';
+        return;
+    }
+    const done = chat.taskPlan.steps.filter(s => s.done).length;
+    const total = chat.taskPlan.steps.length;
+    document.getElementById('task-resume-text').textContent = `Tache en cours : ${done}/${total} etapes terminees`;
+    banner.style.display = 'flex';
+}
+
+function resumeTask() {
+    const chat = _chats[_activeChatId];
+    if (!chat || !chat.taskPlan) return;
+    const planState = chat.taskPlan.steps.map((s, i) =>
+        `${i + 1}. [${s.done ? 'x' : ' '}] ${s.label}`
+    ).join('\n');
+    const input = document.getElementById('chat-input');
+    input.value = `Reprends la tache en cours. Voici l'etat du plan :\n${planState}\nContinue a partir de la prochaine etape non terminee.`;
+    document.getElementById('task-resume-banner').style.display = 'none';
+    sendChat();
+}
+
+function dismissTaskBanner() {
+    const chat = _chats[_activeChatId];
+    if (chat) chat.taskPlan = null;
+    document.getElementById('task-resume-banner').style.display = 'none';
+    saveChatState();
 }
 
 async function sendChat() {
@@ -2390,6 +2464,9 @@ async function sendChat() {
         chat.history.push({ role: 'user', content: msg });
         chat.history.push({ role: 'assistant', content: fullText });
         if (chat.history.length > 20) chat.history = chat.history.slice(-20);
+        const plan = parseTaskPlan(fullText);
+        if (plan) chat.taskPlan = plan;
+        updateTaskBanner();
     } catch(e) {
         if (e.name !== 'AbortError' && chatId == _activeChatId) {
             typingEl.removeAttribute('id');

@@ -34,7 +34,19 @@ CHAT_SYSTEM_PROMPT = (
     "IMPORTANT: Do NOT narrate your search process step by step. Do NOT write things like "
     "'Laissez-moi chercher...', 'Les résultats ne sont pas pertinents...', 'Je vais faire "
     "une autre recherche...'. Instead, search silently and only present the final, "
-    "well-structured answer to the user."
+    "well-structured answer to the user.\n"
+    "TASK PLANS: When you receive a multi-step task (organizing emails, batch operations, "
+    "creating folders, deleting emails, complex analysis, etc.), structure your work as a "
+    "numbered plan wrapped in markers. Use this exact format:\n"
+    "[[task-plan]]\n"
+    "1. [ ] First step\n"
+    "2. [ ] Second step\n"
+    "[[/task-plan]]\n"
+    "As you complete each step, output the FULL updated plan with [x] for completed steps "
+    "and [ ] for remaining ones. Always include the complete plan so progress is tracked.\n"
+    "If a user says 'Reprendre' or asks to resume, and the conversation includes a task plan, "
+    "read the plan to identify completed steps ([x]) and continue from the first incomplete "
+    "step ([ ]). Do NOT redo completed steps."
 )
 
 
