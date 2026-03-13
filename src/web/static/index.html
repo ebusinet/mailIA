@@ -519,6 +519,81 @@
         body.theme-emerald #bubble-chat-overlay #bubble-chat-header { background: #ecfdf5 !important; border-bottom-color: #6ee7b7 !important; }
         body.theme-emerald #bubble-chat-overlay #bubble-chat-title { color: #059669 !important; }
 
+        /* ---- Violet theme ---- */
+        body.theme-violet { background: #f5f3ff; color: #1e1b4b; --input-bg: #fff; --input-color: #1e1b4b; --input-border: #c4b5fd; --input-placeholder: #7c7c9a; --tag-bg: #ede9fe; --tag-color: #1e1b4b; --tag-icon: #7c7c9a; --tag-active: #7c3aed; }
+        body.theme-violet .auth-card, body.theme-violet header, body.theme-violet .chat-container,
+        body.theme-violet .result-card, body.theme-violet .modal-panel, body.theme-violet .popup-menu,
+        body.theme-violet .input-field, body.theme-violet .settings-panel { background: var(--input-bg); }
+        body.theme-violet .auth-card input, body.theme-violet .chat-input input,
+        body.theme-violet .chat-msg.assistant, body.theme-violet .rules-editor textarea,
+        body.theme-violet .compose-field input, body.theme-violet .compose-field select,
+        body.theme-violet .compose-row input, body.theme-violet .compose-row select,
+        body.theme-violet .compose-options select, body.theme-violet .compose-options-inline select, body.theme-violet .email-toolbar,
+        body.theme-violet .import-tree-item:hover, body.theme-violet .mail-row:hover { background: #faf8ff; }
+        body.theme-violet .folder-item:hover, body.theme-violet .chat-msg.user,
+        body.theme-violet .attachment-chip, body.theme-violet .popup-item:hover { background: #ede9fe; }
+        body.theme-violet .auth-card input, body.theme-violet .btn-sm, body.theme-violet .tab,
+        body.theme-violet .chat-input input, body.theme-violet .rules-editor textarea,
+        body.theme-violet .compose-field input, body.theme-violet .compose-field select,
+        body.theme-violet .compose-row input, body.theme-violet .compose-row select,
+        body.theme-violet .compose-options select, body.theme-violet .compose-options-inline select, body.theme-violet .folder-children,
+        body.theme-violet .local-folders-header, body.theme-violet .modal-header,
+        body.theme-violet .modal-footer, body.theme-violet .popup-menu, body.theme-violet .popup-menu-title,
+        body.theme-violet .result-card, body.theme-violet .input-field, body.theme-violet .mail-row,
+        body.theme-violet .toolbar-sep { border-color: #ddd6fe; }
+        body.theme-violet .auth-card h1, body.theme-violet header h1, body.theme-violet .auth-toggle:hover,
+        body.theme-violet .result-from, body.theme-violet .mail-from, body.theme-violet .modal-header h2,
+        body.theme-violet .reading-meta .from, body.theme-violet .settings-section h3 { color: #7c3aed; }
+        body.theme-violet .result-card:hover { border-left-color: #7c3aed; }
+        body.theme-violet .mail-row.selected { border-left-color: #7c3aed; background: rgba(124,58,237,0.08); }
+        body.theme-violet .btn-sm:hover { border-color: #7c3aed; color: #7c3aed; }
+        body.theme-violet .btn-primary, body.theme-violet .chat-input button,
+        body.theme-violet .auth-card button:not(.pw-toggle) { background: #7c3aed; color: #fff; }
+        body.theme-violet .auth-card button:not(.pw-toggle):hover,
+        body.theme-violet .btn-primary:hover { background: #6d28d9; }
+        body.theme-violet .tab.active { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+        body.theme-violet .folder-item.active { background: #7c3aed; color: #fff; }
+        body.theme-violet .result-subject, body.theme-violet .reading-meta .subject,
+        body.theme-violet .folder-item:hover, body.theme-violet .popup-item:hover,
+        body.theme-violet .modal-close:hover, body.theme-violet .modal-fullscreen-btn:hover,
+        body.theme-violet .mail-row.unread .mail-from, body.theme-violet .mail-row.unread .mail-subject { font-weight: 700; }
+        body.theme-violet .auth-toggle, body.theme-violet .user-info span, body.theme-violet .btn-sm,
+        body.theme-violet .tab, body.theme-violet .result-count, body.theme-violet .mail-subject,
+        body.theme-violet .compose-field label, body.theme-violet .compose-row label, body.theme-violet .compose-options label, body.theme-violet .compose-options-inline label,
+        body.theme-violet .reading-meta .to, body.theme-violet .popup-item,
+        body.theme-violet .folder-item, body.theme-violet .settings-row label { color: #4c4c6d; }
+        body.theme-violet .folder-item[data-storage="local"]:hover { background: #ede9fe; }
+        body.theme-violet .imap-folders-section { background: rgba(124,58,237,0.05); }
+        body.theme-violet .local-folders-section { background: rgba(124,58,237,0.1); }
+        body.theme-violet .theme-card.active { border-color: #7c3aed; }
+        body.theme-violet .theme-card span:last-child { color: #4c4c6d; }
+        body.theme-violet .settings-row select, body.theme-violet .settings-row input[type="color"] { background: var(--input-bg); color: var(--input-color); border-color: var(--input-border); }
+        body.theme-violet .mail-filter-row input { background: var(--input-bg); border-color: var(--input-border); color: var(--input-color); }
+        body.theme-violet .mail-filter-row input:focus { border-color: #7c3aed; }
+        body.theme-violet .mail-header { border-bottom-color: #ddd6fe; }
+        body.theme-violet .mail-header-col.sorted, body.theme-violet .mail-header-col:hover { color: #7c3aed; }
+        body.theme-violet .pager-btn { border-color: #ddd6fe; color: #4c4c6d; }
+        body.theme-violet .pager-btn:hover { border-color: #7c3aed; color: #7c3aed; }
+        body.theme-violet .pager-btn.active { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+        body.theme-violet [style*="background:#1e293b"] { background: #fff !important; }
+        body.theme-violet [style*="background:#0f172a"] { background: #faf8ff !important; }
+        body.theme-violet [style*="background:#334155"] { background: #ede9fe !important; }
+        body.theme-violet [style*="color:#94a3b8"] { color: #7c7c9a !important; }
+        body.theme-violet [style*="color:#e2e8f0"] { color: #1e1b4b !important; }
+        body.theme-violet [style*="color:#38bdf8"] { color: #7c3aed !important; }
+        body.theme-violet [style*="border:1px solid #334155"] { border-color: #ddd6fe !important; }
+        body.theme-violet [style*="border-bottom:1px solid #334155"] { border-bottom-color: #ddd6fe !important; }
+        body.theme-violet [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #ede9fe !important; }
+        body.theme-violet [style*="border-top:1px solid #334155"] { border-top-color: #ddd6fe !important; }
+        body.theme-violet [style*="border-left:2px solid #38bdf8"] { border-left-color: #7c3aed !important; }
+        body.theme-violet #preview-pane { background: #faf8ff; box-shadow: inset 0 4px 8px rgba(0,0,0,0.04); }
+        body.theme-violet .preview-header { border-bottom-color: #ddd6fe; }
+        body.theme-violet #preview-subject { color: #1e1b4b !important; }
+        body.theme-violet #bubble-chat-overlay { background: #fff !important; border-color: #c4b5fd !important; box-shadow: 0 8px 32px rgba(124,58,237,0.12) !important; }
+        body.theme-violet #bubble-chat-overlay #bubble-chat-header { background: #f5f3ff !important; border-bottom-color: #c4b5fd !important; }
+        body.theme-violet #bubble-chat-overlay #bubble-chat-title { color: #7c3aed !important; }
+        body.theme-violet .import-tree-item.selected { background: rgba(124,58,237,0.1); }
+
         /* Preview pane */
         .preview-header { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: inherit; z-index: 1; border-bottom: 1px solid #334155; }
         .preview-meta { flex-shrink: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.15); position: relative; z-index: 1; }
@@ -1471,6 +1546,10 @@
                         <div class="theme-card" data-theme="emerald" onclick="setTheme('emerald')">
                             <div class="theme-card-preview" style="background:#ecfdf5"><span style="color:#059669">Aa</span></div>
                             <span>Emeraude</span>
+                        </div>
+                        <div class="theme-card" data-theme="violet" onclick="setTheme('violet')">
+                            <div class="theme-card-preview" style="background:#f5f3ff"><span style="color:#7c3aed">Aa</span></div>
+                            <span>Violet</span>
                         </div>
                     </div>
                 </div>
