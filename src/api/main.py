@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts
+from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts, signatures
 from src.config import get_settings
 
 settings = get_settings()
@@ -52,6 +52,7 @@ app.include_router(rules.router, prefix="/api/rules", tags=["rules"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"])
+app.include_router(signatures.router, prefix="/api/signatures", tags=["signatures"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")

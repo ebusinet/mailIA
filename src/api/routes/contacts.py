@@ -22,6 +22,7 @@ class ContactCreate(BaseModel):
     ai_directives: str | None = None
     notes: str | None = None
     group_ids: list[int] = []
+    signature_id: int | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -32,16 +33,19 @@ class ContactUpdate(BaseModel):
     ai_directives: str | None = None
     notes: str | None = None
     group_ids: list[int] | None = None
+    signature_id: int | None = None
 
 
 class GroupCreate(BaseModel):
     name: str
     ai_directives: str | None = None
+    signature_id: int | None = None
 
 
 class GroupUpdate(BaseModel):
     name: str | None = None
     ai_directives: str | None = None
+    signature_id: int | None = None
 
 
 class GroupMembersAdd(BaseModel):
@@ -71,6 +75,7 @@ async def list_contacts(
             "emails": c.emails or [],
             "ai_directives": c.ai_directives,
             "notes": c.notes,
+            "signature_id": c.signature_id,
             "groups": [{"id": g.id, "name": g.name} for g in c.groups],
         }
         for c in contacts
@@ -91,6 +96,7 @@ async def create_contact(
         emails=req.emails,
         ai_directives=req.ai_directives,
         notes=req.notes,
+        signature_id=req.signature_id,
     )
     if req.group_ids:
         groups = (await db.execute(
@@ -111,6 +117,7 @@ async def create_contact(
         "emails": contact.emails or [],
         "ai_directives": contact.ai_directives,
         "notes": contact.notes,
+        "signature_id": contact.signature_id,
         "groups": [{"id": g.id, "name": g.name} for g in contact.groups],
     }
 
@@ -143,6 +150,8 @@ async def update_contact(
         contact.ai_directives = req.ai_directives if req.ai_directives else None
     if req.notes is not None:
         contact.notes = req.notes if req.notes else None
+    if req.signature_id is not None:
+        contact.signature_id = req.signature_id if req.signature_id != 0 else None
     if req.group_ids is not None:
         groups = (await db.execute(
             select(ContactGroup).where(
@@ -162,6 +171,7 @@ async def update_contact(
         "emails": contact.emails or [],
         "ai_directives": contact.ai_directives,
         "notes": contact.notes,
+        "signature_id": contact.signature_id,
         "groups": [{"id": g.id, "name": g.name} for g in contact.groups],
     }
 
@@ -215,6 +225,7 @@ async def list_groups(
             "id": g.id,
             "name": g.name,
             "ai_directives": g.ai_directives,
+            "signature_id": g.signature_id,
             "member_count": len(g.contacts),
             "members": [{"id": c.id, "name": c.name} for c in g.contacts],
         }
@@ -232,6 +243,7 @@ async def create_group(
         user_id=user.id,
         name=req.name,
         ai_directives=req.ai_directives,
+        signature_id=req.signature_id,
     )
     db.add(group)
     await db.commit()
@@ -240,6 +252,7 @@ async def create_group(
         "id": group.id,
         "name": group.name,
         "ai_directives": group.ai_directives,
+        "signature_id": group.signature_id,
         "member_count": 0,
         "members": [],
     }
@@ -263,6 +276,8 @@ async def update_group(
         group.name = req.name
     if req.ai_directives is not None:
         group.ai_directives = req.ai_directives if req.ai_directives else None
+    if req.signature_id is not None:
+        group.signature_id = req.signature_id if req.signature_id != 0 else None
 
     await db.commit()
     await db.refresh(group)
@@ -270,6 +285,7 @@ async def update_group(
         "id": group.id,
         "name": group.name,
         "ai_directives": group.ai_directives,
+        "signature_id": group.signature_id,
     }
 
 

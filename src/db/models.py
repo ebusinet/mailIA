@@ -29,6 +29,7 @@ class User(Base):
     ai_rules = relationship("AIRule", back_populates="user", cascade="all, delete-orphan")
     contacts = relationship("Contact", back_populates="user", cascade="all, delete-orphan")
     contact_groups = relationship("ContactGroup", back_populates="user", cascade="all, delete-orphan")
+    signatures = relationship("EmailSignature", back_populates="user", cascade="all, delete-orphan")
 
 
 class MailAccount(Base):
@@ -132,6 +133,20 @@ class LocalFolder(Base):
     __table_args__ = (UniqueConstraint("account_id", "path"),)
 
 
+class EmailSignature(Base):
+    __tablename__ = "email_signatures"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    body_html = Column(Text, nullable=False, default="")
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="signatures")
+
+
 contact_group_members = Table(
     "contact_group_members",
     Base.metadata,
@@ -151,11 +166,13 @@ class Contact(Base):
     emails = Column(JSON, nullable=False, default=list)
     ai_directives = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
+    signature_id = Column(Integer, ForeignKey("email_signatures.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="contacts")
     groups = relationship("ContactGroup", secondary=contact_group_members, back_populates="contacts")
+    signature = relationship("EmailSignature", foreign_keys=[signature_id])
 
 
 class ContactGroup(Base):
@@ -165,10 +182,12 @@ class ContactGroup(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     ai_directives = Column(Text, nullable=True)
+    signature_id = Column(Integer, ForeignKey("email_signatures.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="contact_groups")
     contacts = relationship("Contact", secondary=contact_group_members, back_populates="groups")
+    signature = relationship("EmailSignature", foreign_keys=[signature_id])
 
 
 class LocalEmail(Base):
