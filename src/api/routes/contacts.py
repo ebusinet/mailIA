@@ -401,7 +401,55 @@ async def autocomplete_contacts(
         if len(matches) >= 30:
             break
 
-    # 2. Email history (from local_emails via user's accounts)
+    # 2. Elasticsearch (IMAP indexed emails — from_addr and to_addr)
+    if len(matches) < 30:
+        try:
+            from src.search.indexer import get_es_client, _index_name
+            es = await get_es_client()
+            index = _index_name(user.id)
+            es_body = {
+                "size": 0,
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"wildcard": {"from_addr": f"*{q_lower}*"}},
+                            {"wildcard": {"to_addr": f"*{q_lower}*"}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                },
+                "aggs": {
+                    "from_addrs": {
+                        "terms": {"field": "from_addr", "size": 30,
+                                  "include": f".*{re.escape(q_lower)}.*"}
+                    },
+                    "to_addrs": {
+                        "terms": {"field": "to_addr", "size": 30,
+                                  "include": f".*{re.escape(q_lower)}.*"}
+                    },
+                },
+            }
+            es_result = await es.search(index=index, body=es_body)
+            await es.close()
+
+            for bucket in es_result.get("aggregations", {}).get("from_addrs", {}).get("buckets", []):
+                addr = bucket["key"]
+                if addr not in seen_emails:
+                    seen_emails.add(addr)
+                    matches.append({"name": addr.split("@")[0], "email": addr, "source": "history"})
+                if len(matches) >= 30:
+                    break
+            for bucket in es_result.get("aggregations", {}).get("to_addrs", {}).get("buckets", []):
+                addr = bucket["key"]
+                if addr not in seen_emails:
+                    seen_emails.add(addr)
+                    matches.append({"name": addr.split("@")[0], "email": addr, "source": "history"})
+                if len(matches) >= 30:
+                    break
+        except Exception:
+            pass
+
+    # 3. Local email history (fallback for non-indexed emails)
     if len(matches) < 30:
         account_ids_q = await db.execute(
             select(MailAccount.id).where(MailAccount.user_id == user.id)
@@ -415,7 +463,6 @@ async def autocomplete_contacts(
             folder_ids = [r[0] for r in folder_ids_q.fetchall()]
 
             if folder_ids:
-                like_pattern = f"%{q_lower}%"
                 emails_q = await db.execute(
                     select(LocalEmail.from_addr, LocalEmail.to_addr, LocalEmail.cc_addr)
                     .where(

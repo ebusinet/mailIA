@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts
 from src.config import get_settings
@@ -11,7 +12,30 @@ settings = get_settings()
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+class SSEAwareGZipMiddleware:
+    """GZip middleware that skips compression for SSE (text/event-stream) responses."""
+
+    def __init__(self, app: ASGIApp, minimum_size: int = 1000):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Check if this is a streaming AI endpoint — skip GZip entirely
+        path = scope.get("path", "")
+        if path.startswith("/api/ai/"):
+            await self.app(scope, receive, send)
+            return
+
+        # For all other routes, use normal GZip
+        await self.gzip(scope, receive, send)
+
+
+app.add_middleware(SSEAwareGZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,

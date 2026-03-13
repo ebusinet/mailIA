@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from src.ai.base import LLMProvider
 from src.ai.providers.claude import ClaudeProvider
+from src.ai.providers.claude_native_provider import ClaudeNativeProvider
 from src.ai.providers.ollama import OllamaProvider
 from src.ai.providers.openai_provider import OpenAIProvider
 from src.ai.providers.local_bridge import LocalBridgeProvider, is_agent_connected
@@ -109,6 +110,54 @@ def _build_provider(config: AIProvider, user_id: int) -> LLMProvider:
                 mcp_servers = {"mailia": {"type": "sse", "url": settings.mcp_sse_url}}
         return OpenAIProvider(api_key=api_key, default_model=config.model,
                               base_url=config.endpoint, mcp_servers=mcp_servers)
+
+    if ptype == "claude-native":
+        mcp_servers = None
+        settings = get_settings()
+        if settings.mcp_sse_url:
+            mcp_servers = {"mailia": {"type": "sse", "url": settings.mcp_sse_url}}
+        return ClaudeNativeProvider(
+            api_key=api_key,
+            default_model=config.model,
+            base_url=config.endpoint or "https://ia.expert-presta.com",
+            mcp_servers=mcp_servers,
+        )
+
+    raise ValueError(f"Unknown provider type: {ptype}")
+
+
+def _build_provider_from_params(
+    provider_type: str,
+    endpoint: str | None,
+    api_key: str | None,
+    model: str,
+) -> LLMProvider:
+    """Build a provider from raw parameters (for testing without saving)."""
+    ptype = provider_type.lower()
+    key = api_key or ""
+    settings = get_settings()
+
+    if ptype == "ollama":
+        return OllamaProvider(endpoint=endpoint or "http://localhost:11434", default_model=model)
+
+    if ptype == "claude":
+        return ClaudeProvider(api_key=key, default_model=model)
+
+    if ptype == "openai":
+        mcp_servers = None
+        if endpoint and settings.mcp_sse_url:
+            mcp_servers = {"mailia": {"type": "sse", "url": settings.mcp_sse_url}}
+        return OpenAIProvider(api_key=key, default_model=model, base_url=endpoint, mcp_servers=mcp_servers)
+
+    if ptype == "claude-native":
+        mcp_servers = None
+        if settings.mcp_sse_url:
+            mcp_servers = {"mailia": {"type": "sse", "url": settings.mcp_sse_url}}
+        return ClaudeNativeProvider(
+            api_key=key, default_model=model,
+            base_url=endpoint or "https://ia.expert-presta.com",
+            mcp_servers=mcp_servers,
+        )
 
     raise ValueError(f"Unknown provider type: {ptype}")
 

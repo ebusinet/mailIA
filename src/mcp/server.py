@@ -474,6 +474,93 @@ async def list_emails(
         imap.disconnect()
 
 
+@mcp.tool(tags={"search"})
+async def search_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents)")] = "INBOX",
+    from_addr: Annotated[str | None, Field(description="Search sender name or email (partial match)")] = None,
+    to_addr: Annotated[str | None, Field(description="Search recipient (partial match)")] = None,
+    subject: Annotated[str | None, Field(description="Search in subject (partial match)")] = None,
+    text: Annotated[str | None, Field(description="Full-text search in body")] = None,
+    date_from: Annotated[str | None, Field(description="Emails since this date (YYYY-MM-DD)")] = None,
+    date_to: Annotated[str | None, Field(description="Emails before this date (YYYY-MM-DD)")] = None,
+    limit: Annotated[int, Field(description="Max results to fetch details for (use 0 for count only)", ge=0, le=500)] = 50,
+) -> dict:
+    """Search emails directly in an IMAP folder using server-side SEARCH.
+    Use this to find emails by sender, recipient, subject, or text content.
+    Returns total_matches (the real total) and up to `limit` most recent emails with details.
+    More reliable than full-text search for finding specific emails."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder), readonly=True)
+
+        search_parts = []
+        if from_addr:
+            search_parts.append(f'FROM "{from_addr}"')
+        if to_addr:
+            search_parts.append(f'TO "{to_addr}"')
+        if subject:
+            search_parts.append(f'SUBJECT "{subject}"')
+        if text:
+            search_parts.append(f'TEXT "{text}"')
+        if date_from:
+            from datetime import datetime
+            d = datetime.strptime(date_from, "%Y-%m-%d")
+            search_parts.append(f'SINCE {d.strftime("%d-%b-%Y")}')
+        if date_to:
+            from datetime import datetime
+            d = datetime.strptime(date_to, "%Y-%m-%d")
+            search_parts.append(f'BEFORE {d.strftime("%d-%b-%Y")}')
+
+        if not search_parts:
+            return {"error": "At least one search filter is required"}
+
+        criteria = ' '.join(search_parts)
+        charset = None
+        try:
+            criteria.encode('ascii')
+        except UnicodeEncodeError:
+            charset = 'UTF-8'
+        status, data = imap._conn.uid("SEARCH", charset, criteria)
+        all_uids = data[0].decode().split() if status == "OK" and data[0] else []
+        total = len(all_uids)
+
+        if limit == 0:
+            return {"folder": folder, "total_matches": total, "count": 0, "emails": []}
+
+        # Take the most recent results
+        fetch_uids = all_uids[-limit:] if len(all_uids) > limit else all_uids
+        fetch_uids.reverse()
+
+        emails = []
+        for u in fetch_uids:
+            try:
+                ctx = imap.fetch_email(u, folder)
+                if ctx:
+                    emails.append({
+                        "uid": ctx.uid,
+                        "from": ctx.from_addr,
+                        "subject": ctx.subject,
+                        "date": ctx.date,
+                        "has_attachments": ctx.has_attachments,
+                    })
+            except Exception:
+                pass
+        return {"folder": folder, "total_matches": total, "count": len(emails), "emails": emails}
+    finally:
+        imap.disconnect()
+
+
 @mcp.tool(tags={"read"})
 async def list_folders(
     account_id: Annotated[int, Field(description="Mail account ID")],
@@ -952,6 +1039,1020 @@ async def delete_folder(
     try:
         ok = imap.delete_folder(folder_name)
         return {"status": "deleted" if ok else "failed", "folder": folder_name}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def rename_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    old_name: Annotated[str, Field(description="Current folder name (use display name with accents)")],
+    new_name: Annotated[str, Field(description="New folder name")],
+) -> dict:
+    """Rename an IMAP folder."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    old_name = _normalize_folder(old_name)
+    new_name = _normalize_folder(new_name)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        ok = imap.rename_folder(old_name, new_name)
+        return {"status": "renamed" if ok else "failed", "old_name": old_name, "new_name": new_name}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def mark_read(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents)")],
+    uids: Annotated[list[str], Field(description="Email UIDs to mark as read")],
+) -> dict:
+    """Mark one or more emails as read."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder))
+        uid_set = ",".join(uids)
+        status, _ = imap._conn.uid("STORE", uid_set, "+FLAGS", "\\Seen")
+        ok = status == "OK"
+        return {"status": "ok" if ok else "failed", "count": len(uids)}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def mark_unread(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents)")],
+    uids: Annotated[list[str], Field(description="Email UIDs to mark as unread")],
+) -> dict:
+    """Mark one or more emails as unread."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder))
+        uid_set = ",".join(uids)
+        status, _ = imap._conn.uid("STORE", uid_set, "-FLAGS", "\\Seen")
+        ok = status == "OK"
+        return {"status": "ok" if ok else "failed", "count": len(uids)}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def unflag_email(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents)")],
+    uid: Annotated[str, Field(description="Email UID")],
+) -> dict:
+    """Remove the flagged/starred status from an email."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        ok = imap.unflag_email(uid, folder, "important")
+        return {"status": "ok" if ok else "failed", "uid": uid}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def archive_email(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Source folder name")],
+    uids: Annotated[list[str], Field(description="Email UIDs to archive")],
+) -> dict:
+    """Archive emails by moving them to the Archive folder."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        archive_names = ["Archive", "INBOX.Archive", "Archives", "INBOX.Archives"]
+        folders = imap.list_folders()
+        folder_names = [f["name"] for f in folders]
+        archive_folder = None
+        for a in archive_names:
+            if a in folder_names:
+                archive_folder = a
+                break
+        if not archive_folder:
+            archive_folder = "Archive"
+            imap.create_folder(archive_folder)
+
+        result = imap.move_emails_bulk(uids, folder, archive_folder)
+        return {"status": "archived", "archive_folder": archive_folder, **result}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def count_unread(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folders: Annotated[list[str] | None, Field(description="Folder names to check (null = all folders)")] = None,
+) -> dict:
+    """Count unread emails per folder using IMAP STATUS."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        if not folders:
+            all_folders = imap.list_folders()
+            folders = [f["name"] for f in all_folders]
+
+        results = {}
+        total = 0
+        for f in folders:
+            try:
+                status, data = imap._conn.status(_imap_quote(f), "(UNSEEN MESSAGES)")
+                if status == "OK" and data[0]:
+                    import re
+                    m = re.search(rb'UNSEEN (\d+)', data[0])
+                    t = re.search(rb'MESSAGES (\d+)', data[0])
+                    unseen = int(m.group(1)) if m else 0
+                    msgs = int(t.group(1)) if t else 0
+                    if unseen > 0:
+                        results[f] = {"unread": unseen, "total": msgs}
+                        total += unseen
+            except Exception:
+                pass
+        return {"folders_with_unread": results, "total_unread": total}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def get_thread(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name (use display name with accents)")],
+    uid: Annotated[str, Field(description="UID of any email in the thread")],
+) -> dict:
+    """Get a complete email thread/conversation by following References and In-Reply-To headers."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder), readonly=True)
+
+        # Fetch the target email's Message-ID, References, In-Reply-To, Subject
+        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID REFERENCES IN-REPLY-TO SUBJECT)])")
+        if status != "OK" or not data or data[0] is None:
+            raise ToolError(f"Email UID {uid} not found")
+
+        import email as email_mod
+        header_bytes = data[0][1] if isinstance(data[0], tuple) else b""
+        msg = email_mod.message_from_bytes(header_bytes)
+        message_id = msg.get("Message-ID", "").strip()
+        references = msg.get("References", "").split()
+        in_reply_to = msg.get("In-Reply-To", "").strip()
+        subject = msg.get("Subject", "")
+
+        # Collect all message IDs in the thread
+        thread_ids = set()
+        if message_id:
+            thread_ids.add(message_id)
+        thread_ids.update(references)
+        if in_reply_to:
+            thread_ids.add(in_reply_to)
+
+        # Search by subject (stripped of Re:/Fwd:) as fallback
+        import re
+        base_subject = re.sub(r'^(Re|Fwd|Fw|Tr)\s*:\s*', '', subject, flags=re.IGNORECASE).strip()
+
+        # Search for related emails by HEADER references or subject
+        found_uids = set()
+        found_uids.add(uid)
+
+        for mid in thread_ids:
+            if not mid:
+                continue
+            clean = mid.strip("<>")
+            try:
+                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER Message-ID "<{clean}>"')
+                if status == "OK" and sdata[0]:
+                    found_uids.update(sdata[0].decode().split())
+                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER References "<{clean}>"')
+                if status == "OK" and sdata[0]:
+                    found_uids.update(sdata[0].decode().split())
+            except Exception:
+                pass
+
+        # Also search by base subject for broader matching
+        if base_subject and len(found_uids) < 3:
+            try:
+                safe_subj = base_subject[:60].replace('"', '')
+                status, sdata = imap._conn.uid("SEARCH", None, f'SUBJECT "{safe_subj}"')
+                if status == "OK" and sdata[0]:
+                    found_uids.update(sdata[0].decode().split())
+            except Exception:
+                pass
+
+        # Fetch all thread emails
+        thread = []
+        for u in sorted(found_uids, key=lambda x: int(x)):
+            try:
+                ctx = imap.fetch_email(u, folder)
+                if ctx:
+                    thread.append({
+                        "uid": ctx.uid, "from": ctx.from_addr, "to": ctx.to_addr,
+                        "subject": ctx.subject, "date": ctx.date,
+                        "body_preview": ctx.body_text[:500] if ctx.body_text else "",
+                    })
+            except Exception:
+                pass
+
+        return {"thread_size": len(thread), "emails": thread}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def get_email_headers(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")],
+    uid: Annotated[str, Field(description="Email UID")],
+) -> dict:
+    """Get only email headers (fast, no body download). Useful for checking SPF/DKIM/DMARC, routing, etc."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder), readonly=True)
+        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
+        if status != "OK" or not data or data[0] is None:
+            raise ToolError(f"Email UID {uid} not found")
+
+        import email as email_mod
+        header_bytes = data[0][1] if isinstance(data[0], tuple) else b""
+        msg = email_mod.message_from_bytes(header_bytes)
+
+        headers = {}
+        for key in msg.keys():
+            val = msg.get_all(key)
+            headers[key] = val[0] if len(val) == 1 else val
+        return {"uid": uid, "headers": headers}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"search"})
+async def search_cross_folder(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    from_addr: Annotated[str | None, Field(description="Search sender (partial match)")] = None,
+    to_addr: Annotated[str | None, Field(description="Search recipient (partial match)")] = None,
+    subject: Annotated[str | None, Field(description="Search in subject (partial match)")] = None,
+    text: Annotated[str | None, Field(description="Full-text search in body")] = None,
+    date_from: Annotated[str | None, Field(description="Emails since (YYYY-MM-DD)")] = None,
+    date_to: Annotated[str | None, Field(description="Emails before (YYYY-MM-DD)")] = None,
+    limit_per_folder: Annotated[int, Field(description="Max results per folder", ge=1, le=50)] = 10,
+) -> dict:
+    """Search across ALL folders at once. Returns matches grouped by folder."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        folders = imap.list_folders()
+
+        search_parts = []
+        if from_addr:
+            search_parts.append(f'FROM "{from_addr}"')
+        if to_addr:
+            search_parts.append(f'TO "{to_addr}"')
+        if subject:
+            search_parts.append(f'SUBJECT "{subject}"')
+        if text:
+            search_parts.append(f'TEXT "{text}"')
+        if date_from:
+            from datetime import datetime
+            d = datetime.strptime(date_from, "%Y-%m-%d")
+            search_parts.append(f'SINCE {d.strftime("%d-%b-%Y")}')
+        if date_to:
+            from datetime import datetime
+            d = datetime.strptime(date_to, "%Y-%m-%d")
+            search_parts.append(f'BEFORE {d.strftime("%d-%b-%Y")}')
+
+        if not search_parts:
+            return {"error": "At least one search filter is required"}
+
+        criteria = ' '.join(search_parts)
+        charset = None
+        try:
+            criteria.encode('ascii')
+        except UnicodeEncodeError:
+            charset = 'UTF-8'
+
+        results = {}
+        grand_total = 0
+
+        for f_info in folders:
+            fname = f_info["name"]
+            try:
+                imap._conn.select(_imap_quote(fname), readonly=True)
+                status, data = imap._conn.uid("SEARCH", charset, criteria)
+                found = data[0].decode().split() if status == "OK" and data[0] else []
+                if not found:
+                    continue
+                grand_total += len(found)
+                recent = found[-limit_per_folder:]
+                recent.reverse()
+                emails = []
+                for u in recent:
+                    try:
+                        ctx = imap.fetch_email(u, fname)
+                        if ctx:
+                            emails.append({
+                                "uid": ctx.uid, "from": ctx.from_addr,
+                                "subject": ctx.subject, "date": ctx.date,
+                            })
+                    except Exception:
+                        pass
+                results[fname] = {"total_in_folder": len(found), "emails": emails}
+            except Exception:
+                pass
+
+        return {"total_matches": grand_total, "folders": results}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def list_drafts(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    limit: Annotated[int, Field(description="Max drafts to list", ge=1, le=50)] = 20,
+) -> dict:
+    """List drafts in the Drafts folder."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        draft_names = ["Drafts", "INBOX.Drafts", "Draft", "INBOX.Draft", "Brouillons", "INBOX.Brouillons"]
+        folders = imap.list_folders()
+        folder_names = [f["name"] for f in folders]
+        draft_folder = None
+        for d in draft_names:
+            if d in folder_names:
+                draft_folder = d
+                break
+        if not draft_folder:
+            return {"folder": "Drafts", "count": 0, "drafts": []}
+
+        uids = imap.get_uids(draft_folder)
+        recent = uids[-limit:] if len(uids) > limit else uids
+        recent.reverse()
+
+        drafts = []
+        for u in recent:
+            try:
+                ctx = imap.fetch_email(u, draft_folder)
+                if ctx:
+                    drafts.append({
+                        "uid": ctx.uid, "to": ctx.to_addr,
+                        "subject": ctx.subject, "date": ctx.date,
+                        "body_preview": ctx.body_text[:200] if ctx.body_text else "",
+                    })
+            except Exception:
+                pass
+        return {"folder": draft_folder, "count": len(drafts), "drafts": drafts}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"action"})
+async def delete_draft(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    uid: Annotated[str, Field(description="Draft UID to delete")],
+) -> dict:
+    """Delete a draft from the Drafts folder (permanent deletion, not move to trash)."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        draft_names = ["Drafts", "INBOX.Drafts", "Draft", "INBOX.Draft", "Brouillons", "INBOX.Brouillons"]
+        folders = imap.list_folders()
+        folder_names = [f["name"] for f in folders]
+        draft_folder = "Drafts"
+        for d in draft_names:
+            if d in folder_names:
+                draft_folder = d
+                break
+
+        imap._conn.select(_imap_quote(draft_folder))
+        status, _ = imap._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+        if status == "OK":
+            imap._conn.expunge()
+            return {"status": "deleted", "uid": uid}
+        return {"status": "failed", "uid": uid}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"send"})
+async def update_draft(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    old_uid: Annotated[str, Field(description="UID of existing draft to replace")],
+    to: Annotated[list[str], Field(description="Recipient email addresses")] = [],
+    subject: Annotated[str, Field(description="Email subject")] = "",
+    body: Annotated[str, Field(description="Email body")] = "",
+) -> dict:
+    """Update an existing draft by deleting the old one and saving a new one."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    msg = MIMEMultipart()
+    msg["From"] = account.smtp_user or account.imap_user
+    msg["To"] = ", ".join(to)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        draft_names = ["Drafts", "INBOX.Drafts", "Draft", "INBOX.Draft", "Brouillons", "INBOX.Brouillons"]
+        folders = imap.list_folders()
+        folder_names = [f["name"] for f in folders]
+        draft_folder = "Drafts"
+        for d in draft_names:
+            if d in folder_names:
+                draft_folder = d
+                break
+
+        # Delete old draft
+        imap._conn.select(_imap_quote(draft_folder))
+        imap._conn.uid("STORE", old_uid, "+FLAGS", "\\Deleted")
+        imap._conn.expunge()
+
+        # Save new draft
+        ok = imap.save_draft(msg.as_bytes())
+        return {"status": "updated" if ok else "failed"}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"search"})
+async def email_analytics(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")] = "INBOX",
+    date_from: Annotated[str | None, Field(description="Start date (YYYY-MM-DD)")] = None,
+    date_to: Annotated[str | None, Field(description="End date (YYYY-MM-DD)")] = None,
+    group_by: Annotated[str, Field(description="Group by: 'day', 'sender', or 'both'")] = "both",
+) -> dict:
+    """Get email statistics: count per day and/or per sender for a date range."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder), readonly=True)
+
+        search_parts = []
+        if date_from:
+            from datetime import datetime
+            d = datetime.strptime(date_from, "%Y-%m-%d")
+            search_parts.append(f'SINCE {d.strftime("%d-%b-%Y")}')
+        if date_to:
+            from datetime import datetime
+            d = datetime.strptime(date_to, "%Y-%m-%d")
+            search_parts.append(f'BEFORE {d.strftime("%d-%b-%Y")}')
+
+        criteria = ' '.join(search_parts) if search_parts else 'ALL'
+        status, data = imap._conn.uid("SEARCH", None, criteria)
+        uids = data[0].decode().split() if status == "OK" and data[0] else []
+
+        by_day = {}
+        by_sender = {}
+        total = len(uids)
+
+        # Fetch headers only for performance (ENVELOPE)
+        for u in uids[-500:]:  # Cap at 500 for performance
+            try:
+                ctx = imap.fetch_email(u, folder)
+                if ctx:
+                    day = ctx.date[:10] if ctx.date else "unknown"
+                    sender = ctx.from_addr or "unknown"
+                    if group_by in ("day", "both"):
+                        by_day[day] = by_day.get(day, 0) + 1
+                    if group_by in ("sender", "both"):
+                        by_sender[sender] = by_sender.get(sender, 0) + 1
+            except Exception:
+                pass
+
+        result = {"folder": folder, "total": total}
+        if group_by in ("day", "both"):
+            result["by_day"] = dict(sorted(by_day.items(), reverse=True)[:30])
+        if group_by in ("sender", "both"):
+            result["top_senders"] = dict(sorted(by_sender.items(), key=lambda x: -x[1])[:20])
+        return result
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def export_emails(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")],
+    uids: Annotated[list[str], Field(description="Email UIDs to export")],
+    format: Annotated[str, Field(description="Export format: 'json' or 'eml'")] = "json",
+) -> dict:
+    """Export emails in JSON or EML format."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        exports = []
+        for u in uids[:50]:
+            try:
+                if format == "eml":
+                    raw = imap.fetch_raw(u, folder)
+                    if raw:
+                        import base64
+                        exports.append({"uid": u, "eml_base64": base64.b64encode(raw).decode()})
+                else:
+                    ctx = imap.fetch_email(u, folder)
+                    if ctx:
+                        exports.append({
+                            "uid": ctx.uid, "from": ctx.from_addr, "to": ctx.to_addr,
+                            "subject": ctx.subject, "date": ctx.date,
+                            "body": ctx.body_text, "has_attachments": ctx.has_attachments,
+                            "attachment_names": ctx.attachment_names,
+                        })
+            except Exception:
+                pass
+        return {"format": format, "count": len(exports), "emails": exports}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def validate_email_address(
+    email_address: Annotated[str, Field(description="Email address to validate")],
+) -> dict:
+    """Validate an email address format and check if the domain has MX records."""
+    import re
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    format_ok = bool(re.match(pattern, email_address))
+
+    domain = email_address.split("@")[-1] if "@" in email_address else ""
+    mx_ok = False
+    mx_records = []
+
+    if domain:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["dig", "+short", "MX", domain],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                mx_records = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+                mx_ok = len(mx_records) > 0
+        except Exception:
+            pass
+
+    return {
+        "email": email_address,
+        "format_valid": format_ok,
+        "domain": domain,
+        "mx_valid": mx_ok,
+        "mx_records": mx_records[:5],
+    }
+
+
+@mcp.tool(tags={"admin"})
+async def test_smtp(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+) -> dict:
+    """Test SMTP connection for a mail account."""
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    from src.security import decrypt_value
+
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    if not account.smtp_host:
+        return {"status": "error", "message": "SMTP not configured"}
+
+    try:
+        server = _smtp_connect(account)
+        smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
+        server.login(account.smtp_user or account.imap_user, smtp_password)
+        server.quit()
+        return {"status": "ok", "host": account.smtp_host, "port": account.smtp_port}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool(tags={"read"})
+async def spam_analysis(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")],
+    uid: Annotated[str, Field(description="Email UID to analyze")],
+) -> dict:
+    """Analyze email headers for spam/phishing indicators (SPF, DKIM, DMARC, suspicious patterns)."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        imap._conn.select(_imap_quote(folder), readonly=True)
+        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
+        if status != "OK" or not data or data[0] is None:
+            raise ToolError(f"Email UID {uid} not found")
+
+        import email as email_mod
+        header_bytes = data[0][1] if isinstance(data[0], tuple) else b""
+        msg = email_mod.message_from_bytes(header_bytes)
+
+        checks = {}
+
+        # SPF
+        spf = msg.get("Received-SPF", "") or ""
+        auth_results = msg.get("Authentication-Results", "") or ""
+        checks["spf"] = "pass" if "pass" in spf.lower() else ("fail" if "fail" in spf.lower() else "unknown")
+
+        # DKIM
+        dkim_sig = msg.get("DKIM-Signature", "")
+        checks["dkim_signed"] = bool(dkim_sig)
+        checks["dkim"] = "pass" if "dkim=pass" in auth_results.lower() else ("fail" if "dkim=fail" in auth_results.lower() else "unknown")
+
+        # DMARC
+        checks["dmarc"] = "pass" if "dmarc=pass" in auth_results.lower() else ("fail" if "dmarc=fail" in auth_results.lower() else "unknown")
+
+        # Suspicious indicators
+        from_addr = msg.get("From", "")
+        reply_to = msg.get("Reply-To", "")
+        return_path = msg.get("Return-Path", "")
+
+        warnings = []
+        if reply_to and from_addr and reply_to.lower() != from_addr.lower():
+            warnings.append("Reply-To differs from From address")
+        if return_path and from_addr and return_path.lower() not in from_addr.lower():
+            warnings.append("Return-Path differs from From address")
+        if msg.get("X-Spam-Flag", "").upper() == "YES":
+            warnings.append("Flagged as spam by server")
+        spam_score = msg.get("X-Spam-Score", "")
+        if spam_score:
+            checks["spam_score"] = spam_score
+
+        checks["warnings"] = warnings
+        checks["auth_results"] = auth_results[:300]
+
+        score = 0
+        if checks["spf"] == "pass": score += 1
+        if checks["dkim"] == "pass": score += 1
+        if checks["dmarc"] == "pass": score += 1
+        if not warnings: score += 1
+        checks["trust_score"] = f"{score}/4"
+
+        return {"uid": uid, "analysis": checks}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"search"})
+async def scan_for_spam(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")] = "INBOX",
+    limit: Annotated[int, Field(description="Number of recent emails to scan", ge=1, le=200)] = 50,
+) -> dict:
+    """Scan recent emails in a folder for spam/phishing by analyzing headers in bulk.
+    Returns a ranked list of suspicious emails with trust scores.
+    Use this when asked to find spam, phishing, or suspicious emails."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        from src.imap.manager import _imap_quote
+        import email as email_mod
+
+        imap._conn.select(_imap_quote(folder), readonly=True)
+        status, data = imap._conn.uid("SEARCH", None, "ALL")
+        all_uids = data[0].decode().split() if status == "OK" and data[0] else []
+        scan_uids = all_uids[-limit:] if len(all_uids) > limit else all_uids
+        scan_uids.reverse()
+
+        suspicious = []
+        clean_count = 0
+
+        for u in scan_uids:
+            try:
+                status, hdata = imap._conn.uid("FETCH", u, "(BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO RETURN-PATH SUBJECT AUTHENTICATION-RESULTS RECEIVED-SPF X-SPAM-FLAG X-SPAM-SCORE DKIM-SIGNATURE)])")
+                if status != "OK" or not hdata or hdata[0] is None:
+                    continue
+
+                header_bytes = hdata[0][1] if isinstance(hdata[0], tuple) else b""
+                msg = email_mod.message_from_bytes(header_bytes)
+
+                from_raw = msg.get("From", "")
+                from_name, from_email = email_mod.utils.parseaddr(from_raw)
+                subject = msg.get("Subject", "")
+                reply_to = msg.get("Reply-To", "")
+                return_path = msg.get("Return-Path", "")
+                auth_results = (msg.get("Authentication-Results", "") or "").lower()
+                spf = (msg.get("Received-SPF", "") or "").lower()
+                spam_flag = (msg.get("X-Spam-Flag", "") or "").upper()
+                spam_score_raw = msg.get("X-Spam-Score", "")
+                has_dkim = bool(msg.get("DKIM-Signature", ""))
+
+                # Score: 0 = very suspicious, 4 = clean
+                trust = 0
+                reasons = []
+
+                # SPF check
+                if "pass" in spf or "spf=pass" in auth_results:
+                    trust += 1
+                elif "fail" in spf or "spf=fail" in auth_results:
+                    reasons.append("SPF fail")
+
+                # DKIM check
+                if has_dkim and "dkim=pass" in auth_results:
+                    trust += 1
+                elif "dkim=fail" in auth_results:
+                    reasons.append("DKIM fail")
+                elif not has_dkim:
+                    reasons.append("No DKIM signature")
+
+                # DMARC check
+                if "dmarc=pass" in auth_results:
+                    trust += 1
+                elif "dmarc=fail" in auth_results:
+                    reasons.append("DMARC fail")
+
+                # Reply-To / Return-Path mismatch
+                _, reply_email = email_mod.utils.parseaddr(reply_to)
+                _, return_email = email_mod.utils.parseaddr(return_path)
+                if reply_email and from_email and reply_email.lower() != from_email.lower():
+                    reasons.append(f"Reply-To mismatch: {reply_email}")
+                if return_email and from_email and return_email.lower() != from_email.lower():
+                    reasons.append(f"Return-Path mismatch: {return_email}")
+
+                # Server spam flag
+                if spam_flag == "YES":
+                    reasons.append("Server flagged as spam")
+                if spam_score_raw:
+                    try:
+                        ss = float(spam_score_raw)
+                        if ss > 5:
+                            reasons.append(f"High spam score: {ss}")
+                    except ValueError:
+                        pass
+
+                if not reasons:
+                    trust += 1
+
+                if trust < 3 or reasons:
+                    suspicious.append({
+                        "uid": u,
+                        "from": from_raw[:80],
+                        "subject": subject[:100],
+                        "trust_score": f"{trust}/4",
+                        "reasons": reasons,
+                    })
+                else:
+                    clean_count += 1
+
+            except Exception:
+                pass
+
+        # Sort by trust score ascending (most suspicious first)
+        suspicious.sort(key=lambda x: x["trust_score"])
+
+        return {
+            "folder": folder,
+            "scanned": len(scan_uids),
+            "suspicious_count": len(suspicious),
+            "clean_count": clean_count,
+            "suspicious_emails": suspicious[:50],
+        }
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def extract_calendar_events(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")],
+    uid: Annotated[str, Field(description="Email UID")],
+) -> dict:
+    """Extract calendar events (ICS/iCalendar) from email attachments or body."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        raw = imap.fetch_raw(uid, folder)
+        if not raw:
+            raise ToolError(f"Email UID {uid} not found")
+
+        import email as email_mod
+        msg = email_mod.message_from_bytes(raw)
+        events = []
+
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct in ("text/calendar", "application/ics"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    ics_text = payload.decode("utf-8", errors="replace")
+                    # Parse basic VEVENT fields
+                    event = {}
+                    in_event = False
+                    for line in ics_text.split("\n"):
+                        line = line.strip()
+                        if line == "BEGIN:VEVENT":
+                            in_event = True
+                            event = {}
+                        elif line == "END:VEVENT":
+                            if event:
+                                events.append(event)
+                            in_event = False
+                        elif in_event and ":" in line:
+                            key, _, val = line.partition(":")
+                            key = key.split(";")[0]
+                            if key in ("SUMMARY", "DTSTART", "DTEND", "LOCATION", "DESCRIPTION", "ORGANIZER", "STATUS"):
+                                event[key.lower()] = val
+
+        return {"uid": uid, "events_found": len(events), "events": events}
+    finally:
+        imap.disconnect()
+
+
+@mcp.tool(tags={"read"})
+async def contact_from_email(
+    account_id: Annotated[int, Field(description="Mail account ID")],
+    folder: Annotated[str, Field(description="Folder name")],
+    uid: Annotated[str, Field(description="Email UID")],
+) -> dict:
+    """Extract contact information (name, email, organization) from an email's headers and signature."""
+    from src.mcp.context import get_db, get_imap
+    from src.mcp.helpers import get_account
+
+    folder = _normalize_folder(folder)
+    user_id = _user_id()
+    async with get_db() as db:
+        account = await get_account(db, user_id, account_id)
+
+    imap = get_imap(account)
+    imap.connect()
+    try:
+        raw = imap.fetch_raw(uid, folder)
+        if not raw:
+            raise ToolError(f"Email UID {uid} not found")
+
+        import email as email_mod
+        msg = email_mod.message_from_bytes(raw)
+
+        from_name, from_email = email_mod.utils.parseaddr(msg.get("From", ""))
+        reply_to_name, reply_to_email = email_mod.utils.parseaddr(msg.get("Reply-To", ""))
+        org = msg.get("Organization", "") or msg.get("X-Mailer", "")
+
+        # Extract phone/url from signature (last lines of body)
+        import re
+        body = ""
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    body = payload.decode("utf-8", errors="replace")
+                    break
+
+        # Look in last 15 lines for signature info
+        lines = body.strip().split("\n")[-15:]
+        sig_text = "\n".join(lines)
+
+        phones = re.findall(r'[\+]?[\d\s\-\.]{8,15}', sig_text)
+        urls = re.findall(r'https?://[^\s<>"]+', sig_text)
+
+        contact = {
+            "name": from_name or "",
+            "email": from_email,
+            "reply_to": reply_to_email if reply_to_email != from_email else "",
+            "organization": org,
+            "phones": [p.strip() for p in phones[:3]],
+            "urls": urls[:3],
+        }
+        return {"uid": uid, "contact": contact}
     finally:
         imap.disconnect()
 

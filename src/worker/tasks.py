@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from src.worker.app import app
 from src.db.models import MailAccount, AIRule, ProcessingLog, User
-from src.imap.manager import IMAPManager, IMAPConfig
+from src.imap.manager import IMAPManager, IMAPConfig, _decode_imap_utf7
 from src.search.indexer import get_es_client, ensure_index, index_email, bulk_index_emails
 from src.rules.parser import parse_rules_markdown
 from src.rules.engine import evaluate_rules, EmailContext
@@ -129,7 +129,9 @@ async def _sync_account(db, account: MailAccount):
         MAX_PER_FOLDER = 2000  # max emails per folder per sync cycle
 
         for entry in folder_entries:
-            folder = entry["name"] if isinstance(entry, dict) else entry
+            imap_folder = entry["name"] if isinstance(entry, dict) else entry
+            display_folder = entry.get("display_name", imap_folder) if isinstance(entry, dict) else imap_folder
+            folder = imap_folder  # Use IMAP UTF-7 name for IMAP operations
             try:
                 last_uid = sync_state.get(folder)
                 uids = imap.get_uids(folder, since_uid=last_uid)
@@ -149,6 +151,7 @@ async def _sync_account(db, account: MailAccount):
                         try:
                             email_ctx = imap.fetch_email(uid, folder)
                             if email_ctx:
+                                email_ctx.folder = display_folder  # Store UTF-8 in ES
                                 batch_contexts.append(email_ctx)
                         except Exception as e:
                             logger.error(f"Error fetching UID {uid} in {folder}: {e}")

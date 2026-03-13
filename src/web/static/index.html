@@ -95,6 +95,9 @@
         body.theme-light .mail-filter-row { border-bottom-color: #cbd5e1; }
         body.theme-light .mail-filter-row input { background: var(--input-bg); border-color: var(--input-border); color: var(--input-color); }
         body.theme-light .mail-filter-row input:focus { border-color: #0284c7; }
+        body.theme-light .filter-toggle-btn { color: #94a3b8; border-color: #cbd5e1; }
+        body.theme-light .filter-toggle-btn:hover { border-color: #0284c7; color: #0284c7; }
+        body.theme-light .filter-toggle-btn.active { background: #0284c7; border-color: #0284c7; color: #fff; }
         body.theme-light .pager-btn { border-color: #cbd5e1; color: #475569; }
         body.theme-light .pager-btn:hover { border-color: #0284c7; color: #0284c7; }
         body.theme-light .pager-btn.active { background: #0284c7; color: #fff; border-color: #0284c7; }
@@ -109,6 +112,9 @@
         body.theme-light .bulk-bar button:hover { background: #0284c7; color: #fff; }
         body.theme-light .explorer-toolbar .toolbar-sep { background: #cbd5e1; }
         body.theme-light .toolbar-icon.active-on { background: #0284c7; color: #fff !important; border-color: #0284c7; }
+        body.theme-light #bubble-chat-overlay { background: #fff !important; border-color: #cbd5e1 !important; box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important; }
+        body.theme-light #bubble-chat-overlay #bubble-chat-header { background: #f8fafc !important; border-bottom-color: #cbd5e1 !important; }
+        body.theme-light #bubble-chat-overlay #bubble-chat-title { color: #0284c7 !important; }
 
         /* ---- Nord theme ---- */
         body.theme-nord { background: #2e3440; color: #eceff4; --input-bg: #3b4252; --input-color: #eceff4; --input-border: #434c5e; --input-placeholder: #7b88a1; --tag-bg: #434c5e; --tag-color: #eceff4; --tag-icon: #7b88a1; --tag-active: #88c0d0; }
@@ -163,6 +169,9 @@
         body.theme-nord [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #3b4252 !important; }
         body.theme-nord [style*="border-top:1px solid #334155"] { border-top-color: #434c5e !important; }
         body.theme-nord [style*="border-left:2px solid #38bdf8"] { border-left-color: #88c0d0 !important; }
+        body.theme-nord #bubble-chat-overlay { background: #3b4252 !important; border-color: #434c5e !important; }
+        body.theme-nord #bubble-chat-overlay #bubble-chat-header { background: #2e3440 !important; border-bottom-color: #434c5e !important; }
+        body.theme-nord #bubble-chat-overlay #bubble-chat-title { color: #88c0d0 !important; }
 
         /* ---- Dracula theme ---- */
         body.theme-dracula { background: #282a36; color: #f8f8f2; --input-bg: #44475a; --input-color: #f8f8f2; --input-border: #6272a4; --input-placeholder: #8b8fa8; --tag-bg: #6272a4; --tag-color: #f8f8f2; --tag-icon: #8b8fa8; --tag-active: #bd93f9; }
@@ -219,6 +228,9 @@
         body.theme-dracula [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #44475a !important; }
         body.theme-dracula [style*="border-top:1px solid #334155"] { border-top-color: #6272a4 !important; }
         body.theme-dracula [style*="border-left:2px solid #38bdf8"] { border-left-color: #bd93f9 !important; }
+        body.theme-dracula #bubble-chat-overlay { background: #44475a !important; border-color: #6272a4 !important; }
+        body.theme-dracula #bubble-chat-overlay #bubble-chat-header { background: #282a36 !important; border-bottom-color: #6272a4 !important; }
+        body.theme-dracula #bubble-chat-overlay #bubble-chat-title { color: #bd93f9 !important; }
 
         /* ---- Ocean theme ---- */
         body.theme-ocean { background: #0a192f; color: #ccd6f6; --input-bg: #172a45; --input-color: #ccd6f6; --input-border: #233554; --input-placeholder: #5a7a9a; --tag-bg: #233554; --tag-color: #ccd6f6; --tag-icon: #5a7a9a; --tag-active: #64ffda; }
@@ -273,6 +285,9 @@
         body.theme-ocean [style*="border-bottom:1px solid #1e293b"] { border-bottom-color: #172a45 !important; }
         body.theme-ocean [style*="border-top:1px solid #334155"] { border-top-color: #1d3557 !important; }
         body.theme-ocean [style*="border-left:2px solid #38bdf8"] { border-left-color: #64ffda !important; }
+        body.theme-ocean #bubble-chat-overlay { background: #172a45 !important; border-color: #233554 !important; }
+        body.theme-ocean #bubble-chat-overlay #bubble-chat-header { background: #0a192f !important; border-bottom-color: #233554 !important; }
+        body.theme-ocean #bubble-chat-overlay #bubble-chat-title { color: #64ffda !important; }
 
         /* ---- Solarized Light theme ---- */
         body.theme-solarized { background: #fdf6e3; color: #657b83; --input-bg: #eee8d5; --input-color: #073642; --input-border: #93a1a1; --input-placeholder: #93a1a1; --tag-bg: #eee8d5; --tag-color: #073642; --tag-icon: #93a1a1; --tag-active: #268bd2; }
@@ -342,6 +357,9 @@
         body.theme-solarized #preview-pane { background: #f5f0e1; box-shadow: inset 0 4px 8px rgba(0,0,0,0.06); }
         body.theme-solarized .preview-header { border-bottom-color: #d3cbb7; }
         body.theme-solarized #preview-subject { color: #657b83 !important; }
+        body.theme-solarized #bubble-chat-overlay { background: #eee8d5 !important; border-color: #93a1a1 !important; box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important; }
+        body.theme-solarized #bubble-chat-overlay #bubble-chat-header { background: #fdf6e3 !important; border-bottom-color: #93a1a1 !important; }
+        body.theme-solarized #bubble-chat-overlay #bubble-chat-title { color: #268bd2 !important; }
 
         /* ---- Rose theme ---- */
         body.theme-rose { background: #fff1f2; color: #1e293b; --input-bg: #fff; --input-color: #1e293b; --input-border: #fda4af; --input-placeholder: #9f7aea; --tag-bg: #fecdd3; --tag-color: #1e293b; --tag-icon: #9f7aea; --tag-active: #e11d48; }
@@ -411,6 +429,9 @@
         body.theme-rose #preview-pane { background: #fff5f5; box-shadow: inset 0 4px 8px rgba(0,0,0,0.04); }
         body.theme-rose .preview-header { border-bottom-color: #fecdd3; }
         body.theme-rose #preview-subject { color: #1e293b !important; }
+        body.theme-rose #bubble-chat-overlay { background: #fff !important; border-color: #fda4af !important; box-shadow: 0 8px 32px rgba(225,29,72,0.12) !important; }
+        body.theme-rose #bubble-chat-overlay #bubble-chat-header { background: #fff1f2 !important; border-bottom-color: #fda4af !important; }
+        body.theme-rose #bubble-chat-overlay #bubble-chat-title { color: #e11d48 !important; }
 
         /* ---- Emerald theme ---- */
         body.theme-emerald { background: #ecfdf5; color: #1e293b; --input-bg: #fff; --input-color: #1e293b; --input-border: #6ee7b7; --input-placeholder: #64748b; --tag-bg: #d1fae5; --tag-color: #1e293b; --tag-icon: #64748b; --tag-active: #059669; }
@@ -480,6 +501,9 @@
         body.theme-emerald #preview-pane { background: #f0fdf4; box-shadow: inset 0 4px 8px rgba(0,0,0,0.04); }
         body.theme-emerald .preview-header { border-bottom-color: #a7f3d0; }
         body.theme-emerald #preview-subject { color: #1e293b !important; }
+        body.theme-emerald #bubble-chat-overlay { background: #fff !important; border-color: #6ee7b7 !important; box-shadow: 0 8px 32px rgba(5,150,105,0.12) !important; }
+        body.theme-emerald #bubble-chat-overlay #bubble-chat-header { background: #ecfdf5 !important; border-bottom-color: #6ee7b7 !important; }
+        body.theme-emerald #bubble-chat-overlay #bubble-chat-title { color: #059669 !important; }
 
         /* Preview pane */
         .preview-header { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: inherit; z-index: 1; border-bottom: 1px solid #334155; }
@@ -499,6 +523,9 @@
         .mail-filter-row input { background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 4px; color: var(--input-color); padding: 0.15rem 0.4rem; font-size: 0.75rem; width: 100%; }
         .mail-filter-row input::placeholder { color: var(--input-placeholder); }
         .mail-filter-row input:focus { border-color: #38bdf8; outline: none; }
+        .filter-toggle-btn { background: transparent; border: 1px solid var(--input-border); border-radius: 4px; color: #64748b; cursor: pointer; font-size: 0.75rem; padding: 0.1rem 0.3rem; line-height: 1; transition: all 0.15s; }
+        .filter-toggle-btn:hover { border-color: #38bdf8; color: #38bdf8; }
+        .filter-toggle-btn.active { background: #0284c7; border-color: #0284c7; color: #fff; }
         /* Resize handle */
         .pane-resize-handle { height: 6px; cursor: row-resize; background: transparent; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .pane-resize-handle:hover, .pane-resize-handle.dragging { background: #334155; }
@@ -963,14 +990,20 @@
                         </div>
                         <div class="mail-filter-row" style="grid-template-columns:20px auto 1fr 2fr auto">
                             <div></div>
-                            <div></div>
+                            <div style="display:flex;gap:2px;align-items:center">
+                                <button id="filter-attachments" class="filter-toggle-btn" onclick="toggleFilterBtn(this)" title="Pieces jointes">&#x1F4CE;</button>
+                                <button id="filter-replied" class="filter-toggle-btn" onclick="toggleFilterBtn(this)" title="Repondu">&#8617;</button>
+                            </div>
                             <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-from">
                             <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-subject">
                             <input type="text" placeholder="Filtrer..." oninput="debouncedFilterMailRows()" id="filter-date">
                         </div>
                     </div>
                     <div id="explorer-messages" style="flex:1;overflow-y:auto;min-height:0"></div>
-                    <div id="explorer-pager" style="display:flex;gap:0.4rem;margin:0.5rem 0;justify-content:center;align-items:center;flex-wrap:wrap;flex-shrink:0"></div>
+                    <div style="display:flex;align-items:center;margin:0.5rem 0;flex-shrink:0">
+                        <div id="explorer-pager" style="display:flex;gap:0.4rem;justify-content:center;align-items:center;flex-wrap:wrap;flex:1"></div>
+                        <button id="bubble-chat-btn" onclick="toggleBubbleChat()" title="Assistant IA contextuel" style="width:36px;height:36px;border-radius:50%;border:2px solid #38bdf8;background:transparent;color:#38bdf8;cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s">&#x1F4AC;</button>
+                    </div>
                     <div id="pane-resize-handle" class="pane-resize-handle hidden"></div>
                     <div id="preview-pane" class="hidden" style="border-top:1px solid #334155;margin-top:0;display:flex;flex-direction:column;min-height:0;flex:1">
                         <div class="preview-meta">
@@ -1204,8 +1237,59 @@
                     <div id="admin-info" style="margin-top:0.75rem;color:#64748b;font-size:0.85rem"></div>
                 </div>
             </div>
+
+            <!-- AI Providers -->
+            <div class="panel-card" style="margin-top:1.5rem">
+                <h3 class="panel-card-title">Fournisseurs IA</h3>
+                <div id="admin-providers-list" style="margin-bottom:0.5rem"></div>
+                <button class="btn-sm btn-primary" onclick="showAddProviderForm()" style="font-size:0.85rem">+ Ajouter un fournisseur</button>
+                <div id="provider-form" class="hidden" style="margin-top:0.75rem;padding:0.75rem;border:1px solid #334155;border-radius:8px">
+                    <input type="hidden" id="prov-edit-id" value="">
+                    <div class="compose-field"><label>Nom</label><input type="text" id="prov-name" class="input-field" placeholder="Mon fournisseur"></div>
+                    <div class="compose-field"><label>Type</label>
+                        <select id="prov-type" class="input-field" onchange="onProvTypeChange()">
+                            <option value="openai">OpenAI Compatible</option>
+                            <option value="claude-native">Claude Code Natif</option>
+                            <option value="claude">Claude (API directe)</option>
+                            <option value="ollama">Ollama (local)</option>
+                        </select>
+                    </div>
+                    <div class="compose-field"><label>Endpoint</label><input type="text" id="prov-endpoint" class="input-field" placeholder="https://ia.expert-presta.com/v1"></div>
+                    <div class="compose-field"><label>Cle API</label><input type="password" id="prov-apikey" class="input-field" placeholder="sk-..."></div>
+                    <div class="compose-field"><label>Modele</label>
+                        <select id="prov-model-select" class="input-field" onchange="onProvModelSelect()"></select>
+                        <input type="text" id="prov-model-custom" class="input-field hidden" placeholder="Nom du modele personnalise" style="margin-top:0.3rem">
+                    </div>
+                    <div style="display:flex;gap:0.3rem;margin-top:0.5rem;flex-wrap:wrap">
+                        <button class="btn-primary btn-sm" onclick="saveProvider()">Enregistrer</button>
+                        <button class="btn-sm" onclick="testProviderForm()" style="background:#0ea5e9;color:#fff">Tester</button>
+                        <button class="btn-sm" onclick="hideProviderForm()">Annuler</button>
+                        <span id="prov-test-status" style="font-size:0.8rem;margin-left:0.5rem;align-self:center"></span>
+                    </div>
+                </div>
+                <!-- Diagnostic results -->
+                <div id="admin-diag-result" class="hidden" style="margin-top:0.75rem;padding:0.75rem;border:1px solid #334155;border-radius:8px;font-size:0.85rem"></div>
+            </div>
         </div>
 
+    </div>
+</div>
+
+<!-- Bubble Chat -->
+<div id="bubble-chat-overlay" class="hidden" style="position:fixed;bottom:60px;right:30px;width:420px;height:500px;min-width:300px;min-height:250px;max-width:90vw;max-height:85vh;background:#1e293b;border:1px solid #334155;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:1005;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;padding:0.6rem 0.8rem;background:#1e293b;border-bottom:1px solid #334155;flex-shrink:0;cursor:nw-resize" id="bubble-chat-header" onmousedown="bubbleResizeStart(event)">
+        <span style="color:#475569;font-size:0.7rem;margin-right:0.4rem;cursor:nw-resize" title="Redimensionner">&#x2921;</span>
+        <span style="flex:1;color:#38bdf8;font-weight:600;font-size:0.9rem" id="bubble-chat-title">Assistant IA</span>
+        <button onclick="clearBubbleChat()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;margin-right:0.5rem" title="Nouveau chat">&#x1F5D1;</button>
+        <button onclick="toggleBubbleChat()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:1.2rem">&times;</button>
+    </div>
+    <div id="bubble-chat-messages" style="flex:1;overflow-y:auto;padding:0.6rem;min-height:60px">
+        <div class="chat-msg assistant"><div class="chat-md">Comment puis-je vous aider avec ce dossier ?</div></div>
+    </div>
+    <div style="display:flex;gap:0.4rem;padding:0.5rem 0.6rem;border-top:1px solid #334155;flex-shrink:0">
+        <input type="text" id="bubble-chat-input" placeholder="Question sur ce dossier..." style="flex:1;padding:0.5rem 0.7rem;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);color:var(--input-color);font-size:0.85rem" onkeydown="if(event.key==='Enter'&&!event.shiftKey)sendBubbleChat()">
+        <button onclick="sendBubbleChat()" id="bubble-send-btn" style="padding:0.5rem 0.8rem;border:none;border-radius:8px;background:#38bdf8;color:#fff;font-weight:600;cursor:pointer;font-size:0.85rem">Envoyer</button>
+        <button onclick="stopBubbleChat()" id="bubble-stop-btn" style="display:none;padding:0.5rem 0.8rem;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:600;cursor:pointer;font-size:0.85rem">Stop</button>
     </div>
 </div>
 
@@ -1627,6 +1711,14 @@ async function initApp() {
             document.getElementById('tab-status-btn').classList.remove('hidden');
         }
     } catch(e) { logout(); return; }
+
+    // Standalone email view mode
+    const urlParams = new URLSearchParams(location.search);
+    if (urlParams.get('email')) {
+        _openStandaloneEmail(urlParams.get('email'), urlParams.get('account'), urlParams.get('folder') || 'INBOX', urlParams.get('storage') || 'imap', urlParams.get('mode'));
+        return;
+    }
+
     loadChatState();
     await Promise.all([
         loadRules(),
@@ -2103,19 +2195,253 @@ async function loadImportJobs() {
 }
 
 // === Chat ===
+const _provTypeLabels = { openai: 'OpenAI', 'claude-native': 'Natif', claude: 'Claude', ollama: 'Ollama', local: 'Local' };
 async function loadAIProviders() {
     try {
         aiProvidersCache = await api('/ai/providers');
         const sel = document.getElementById('chat-provider');
         sel.innerHTML = '<option value="">Par defaut</option>';
         for (const p of aiProvidersCache) {
-            sel.innerHTML += `<option value="${p.id}" ${p.is_default ? 'selected' : ''}>${esc(p.name)} (${esc(p.model)})</option>`;
+            const badge = _provTypeLabels[p.provider_type] || p.provider_type;
+            sel.innerHTML += `<option value="${p.id}" ${p.is_default ? 'selected' : ''}>${esc(p.name)} [${badge}] (${esc(p.model)})</option>`;
         }
-        // Restore provider from active chat
         if (_activeChatId && _chats[_activeChatId] && _chats[_activeChatId].providerId) {
             sel.value = _chats[_activeChatId].providerId;
         }
+        renderAdminProviders();
     } catch(e) {}
+}
+function renderAdminProviders() {
+    const el = document.getElementById('admin-providers-list');
+    if (!el) return;
+    if (!aiProvidersCache.length) { el.innerHTML = '<div style="color:#64748b;font-size:0.85rem">Aucun fournisseur configure</div>'; return; }
+    const statusIcons = { ok: '&#x2705;', error: '&#x274C;', pending: '&#x23F3;', none: '&#x2B55;' };
+    el.innerHTML = aiProvidersCache.map(p => {
+        const badge = _provTypeLabels[p.provider_type] || p.provider_type;
+        const testStatus = p._testStatus || 'none';
+        const statusIcon = statusIcons[testStatus] || statusIcons.none;
+        const starStyle = p.is_default
+            ? 'color:#fbbf24;font-size:1.1rem;cursor:pointer'
+            : 'color:#475569;font-size:1.1rem;cursor:pointer';
+        const starTitle = p.is_default ? 'IA par defaut' : 'Definir comme IA par defaut';
+        const rowBorder = p.is_default ? 'border-left:3px solid #fbbf24;' : 'border-left:3px solid transparent;';
+        return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.6rem;background:#0f172a;border-radius:6px;margin-bottom:0.4rem;font-size:0.85rem;${rowBorder}">
+            <span id="prov-status-${p.id}" style="font-size:0.9rem;cursor:help" title="Cliquer pour tester">${statusIcon}</span>
+            <span onclick="setDefaultProvider(${p.id})" style="${starStyle}" title="${starTitle}">&#x2605;</span>
+            <span style="flex:1;color:#e2e8f0">${esc(p.name)} <span style="color:#64748b">[${badge}]</span> — <strong>${esc(p.model)}</strong>${p.is_default ? ' <span style="color:#fbbf24;font-size:0.7rem">&#x2605; defaut</span>' : ''}</span>
+            <button class="btn-sm" onclick="testExistingProvider(${p.id})" style="font-size:0.75rem;padding:2px 8px;background:#0ea5e9;color:#fff" title="Test rapide">Test</button>
+            <button class="btn-sm" onclick="diagnoseProvider(${p.id})" style="font-size:0.75rem;padding:2px 8px;background:#8b5cf6;color:#fff" title="Diagnostic complet">Diag</button>
+            <button class="btn-sm" onclick="editProvider(${p.id})" style="font-size:0.75rem;padding:2px 8px">&#x270E;</button>
+            <button class="btn-sm btn-danger" onclick="deleteProviderUI(${p.id})" style="font-size:0.75rem;padding:2px 8px">&times;</button>
+        </div>`;
+    }).join('');
+}
+const _provModelPresets = {
+    openai: [
+        { value: 'claude-code-full', label: 'Claude Code Full (Opus)' },
+        { value: 'claude-code', label: 'Claude Code (Sonnet)' },
+        { value: 'gpt-4o', label: 'GPT-4o' },
+        { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    ],
+    'claude-native': [
+        { value: 'sonnet', label: 'Sonnet' },
+        { value: 'opus', label: 'Opus' },
+        { value: 'haiku', label: 'Haiku' },
+    ],
+    claude: [
+        { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+        { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+        { value: 'claude-haiku-4-20250514', label: 'Claude Haiku 4' },
+    ],
+    ollama: [
+        { value: 'llama3', label: 'Llama 3' },
+        { value: 'mistral', label: 'Mistral' },
+        { value: 'codellama', label: 'Code Llama' },
+        { value: 'deepseek-coder', label: 'DeepSeek Coder' },
+    ],
+};
+const _provEndpointHints = {
+    openai: 'https://ia.expert-presta.com/v1',
+    'claude-native': 'https://ia.expert-presta.com',
+    claude: '(API Anthropic directe)',
+    ollama: 'http://localhost:11434',
+};
+function onProvTypeChange() {
+    const t = document.getElementById('prov-type').value;
+    document.getElementById('prov-endpoint').placeholder = _provEndpointHints[t] || '';
+    const sel = document.getElementById('prov-model-select');
+    const presets = _provModelPresets[t] || [];
+    sel.innerHTML = presets.map(m => `<option value="${m.value}">${m.label}</option>`).join('')
+        + '<option value="__custom__">Autre (personnalise)...</option>';
+    onProvModelSelect();
+}
+function onProvModelSelect() {
+    const sel = document.getElementById('prov-model-select');
+    const custom = document.getElementById('prov-model-custom');
+    if (sel.value === '__custom__') {
+        custom.classList.remove('hidden');
+        custom.focus();
+    } else {
+        custom.classList.add('hidden');
+        custom.value = '';
+    }
+}
+function _getSelectedModel() {
+    const sel = document.getElementById('prov-model-select');
+    return sel.value === '__custom__'
+        ? document.getElementById('prov-model-custom').value
+        : sel.value;
+}
+function _setModelField(model) {
+    const t = document.getElementById('prov-type').value;
+    const presets = _provModelPresets[t] || [];
+    const sel = document.getElementById('prov-model-select');
+    const custom = document.getElementById('prov-model-custom');
+    const match = presets.find(m => m.value === model);
+    if (match) {
+        sel.value = model;
+        custom.classList.add('hidden');
+        custom.value = '';
+    } else {
+        sel.value = '__custom__';
+        custom.classList.remove('hidden');
+        custom.value = model;
+    }
+}
+function showAddProviderForm() {
+    document.getElementById('prov-edit-id').value = '';
+    document.getElementById('prov-name').value = '';
+    document.getElementById('prov-type').value = 'openai';
+    document.getElementById('prov-endpoint').value = '';
+    document.getElementById('prov-apikey').value = '';
+    document.getElementById('prov-model-custom').value = '';
+    onProvTypeChange();
+    document.getElementById('provider-form').classList.remove('hidden');
+}
+function hideProviderForm() { document.getElementById('provider-form').classList.add('hidden'); }
+function editProvider(id) {
+    const p = aiProvidersCache.find(x => x.id === id);
+    if (!p) return;
+    document.getElementById('prov-edit-id').value = id;
+    document.getElementById('prov-name').value = p.name;
+    document.getElementById('prov-type').value = p.provider_type;
+    document.getElementById('prov-endpoint').value = p.endpoint || '';
+    document.getElementById('prov-apikey').value = '';
+    onProvTypeChange();
+    _setModelField(p.model);
+    document.getElementById('provider-form').classList.remove('hidden');
+}
+async function saveProvider() {
+    const editId = document.getElementById('prov-edit-id').value;
+    const model = _getSelectedModel();
+    if (!model) { alert('Veuillez selectionner un modele'); return; }
+    const body = {
+        name: document.getElementById('prov-name').value,
+        provider_type: document.getElementById('prov-type').value,
+        endpoint: document.getElementById('prov-endpoint').value || null,
+        model: model,
+    };
+    const apiKey = document.getElementById('prov-apikey').value;
+    if (apiKey) body.api_key = apiKey;
+    try {
+        if (editId) {
+            await api(`/ai/providers/${editId}`, { method: 'PUT', body: JSON.stringify(body) });
+        } else {
+            await api('/ai/providers', { method: 'POST', body: JSON.stringify(body) });
+        }
+        hideProviderForm();
+        await loadAIProviders();
+    } catch(e) { alert('Erreur: ' + (e.message || e)); }
+}
+async function deleteProviderUI(id) {
+    if (!confirm('Supprimer ce fournisseur ?')) return;
+    try {
+        await api(`/ai/providers/${id}`, { method: 'DELETE' });
+        await loadAIProviders();
+    } catch(e) { alert('Erreur: ' + (e.message || e)); }
+}
+async function setDefaultProvider(id) {
+    try {
+        await api(`/ai/providers/${id}`, { method: 'PUT', body: JSON.stringify({ is_default: true }) });
+        await loadAIProviders();
+    } catch(e) { alert('Erreur: ' + (e.message || e)); }
+}
+
+async function testExistingProvider(id) {
+    const statusEl = document.getElementById(`prov-status-${id}`);
+    if (statusEl) statusEl.innerHTML = '&#x23F3;';
+    try {
+        const res = await api(`/ai/providers/${id}/test`, { method: 'POST' });
+        const p = aiProvidersCache.find(x => x.id === id);
+        if (p) p._testStatus = res.status;
+        if (statusEl) statusEl.innerHTML = res.status === 'ok' ? '&#x2705;' : '&#x274C;';
+        if (statusEl) statusEl.title = res.message;
+    } catch(e) {
+        if (statusEl) { statusEl.innerHTML = '&#x274C;'; statusEl.title = e.message; }
+    }
+}
+
+async function testProviderForm() {
+    const statusEl = document.getElementById('prov-test-status');
+    statusEl.textContent = 'Test en cours...';
+    statusEl.style.color = '#94a3b8';
+    const editId = document.getElementById('prov-edit-id').value;
+    try {
+        let res;
+        if (editId) {
+            res = await api(`/ai/providers/${editId}/test`, { method: 'POST' });
+        } else {
+            const body = {
+                provider_type: document.getElementById('prov-type').value,
+                endpoint: document.getElementById('prov-endpoint').value || null,
+                api_key: document.getElementById('prov-apikey').value || null,
+                model: _getSelectedModel(),
+            };
+            res = await api('/ai/providers/test-connection', { method: 'POST', body: JSON.stringify(body) });
+        }
+        if (res.status === 'ok') {
+            statusEl.innerHTML = `&#x2705; ${esc(res.message)}`;
+            statusEl.style.color = '#4ade80';
+        } else {
+            statusEl.innerHTML = `&#x274C; ${esc(res.message)}`;
+            statusEl.style.color = '#f87171';
+        }
+    } catch(e) {
+        statusEl.innerHTML = `&#x274C; ${esc(e.message)}`;
+        statusEl.style.color = '#f87171';
+    }
+}
+
+async function diagnoseProvider(id) {
+    const diagEl = document.getElementById('admin-diag-result');
+    diagEl.classList.remove('hidden');
+    diagEl.innerHTML = '<div style="color:#94a3b8">Diagnostic en cours... (peut prendre 30s)</div>';
+    try {
+        const res = await api(`/ai/providers/${id}/diagnose`, { method: 'POST' });
+        const statusColors = { ok: '#4ade80', error: '#f87171', warn: '#fbbf24', skip: '#64748b' };
+        const statusIcons = { ok: '&#x2705;', error: '&#x274C;', warn: '&#x26A0;&#xFE0F;', skip: '&#x23ED;&#xFE0F;' };
+        let html = `<div style="margin-bottom:0.5rem;font-weight:600;color:${res.status === 'ok' ? '#4ade80' : '#f87171'}">
+            ${res.status === 'ok' ? '&#x2705;' : '&#x274C;'} Diagnostic: ${esc(res.provider_name)}</div>`;
+        html += '<table style="width:100%;border-collapse:collapse;font-size:0.82rem">';
+        for (const c of res.checks) {
+            const color = statusColors[c.status] || '#94a3b8';
+            const icon = statusIcons[c.status] || '';
+            html += `<tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:0.35rem;white-space:nowrap">${icon}</td>
+                <td style="padding:0.35rem;color:${color};font-weight:500;white-space:nowrap">${esc(c.name)}</td>
+                <td style="padding:0.35rem;color:#cbd5e1;word-break:break-all">${esc(c.detail)}</td>
+            </tr>`;
+        }
+        html += '</table>';
+        html += `<button class="btn-sm" onclick="document.getElementById('admin-diag-result').classList.add('hidden')" style="margin-top:0.5rem;font-size:0.8rem">Fermer</button>`;
+        diagEl.innerHTML = html;
+        const p = aiProvidersCache.find(x => x.id === id);
+        if (p) p._testStatus = res.status;
+        renderAdminProviders();
+    } catch(e) {
+        diagEl.innerHTML = `<div style="color:#f87171">Erreur: ${esc(e.message)}</div>
+            <button class="btn-sm" onclick="document.getElementById('admin-diag-result').classList.add('hidden')" style="margin-top:0.5rem;font-size:0.8rem">Fermer</button>`;
+    }
 }
 
 function renderChatMd(text) {
@@ -2735,6 +3061,203 @@ async function sendChat() {
     }
 }
 
+// === Bubble Chat (contextual assistant) ===
+let _bubbleHistory = [];
+let _bubbleAbort = null;
+
+function toggleBubbleChat() {
+    const overlay = document.getElementById('bubble-chat-overlay');
+    overlay.classList.toggle('hidden');
+    if (!overlay.classList.contains('hidden')) {
+        _restoreBubbleSize();
+        _updateBubbleTitle();
+        document.getElementById('bubble-chat-input').focus();
+    }
+}
+function _restoreBubbleSize() {
+    const saved = localStorage.getItem('bubbleChatSize');
+    if (!saved) return;
+    try {
+        const {w, h} = JSON.parse(saved);
+        const overlay = document.getElementById('bubble-chat-overlay');
+        if (w) overlay.style.width = w + 'px';
+        if (h) overlay.style.height = h + 'px';
+    } catch {}
+}
+function _saveBubbleSize() {
+    const overlay = document.getElementById('bubble-chat-overlay');
+    const size = {w: overlay.offsetWidth, h: overlay.offsetHeight};
+    localStorage.setItem('bubbleChatSize', JSON.stringify(size));
+}
+let _bubbleResizing = false;
+function bubbleResizeStart(e) {
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    _bubbleResizing = true;
+    const overlay = document.getElementById('bubble-chat-overlay');
+    const startX = e.clientX, startY = e.clientY;
+    const startW = overlay.offsetWidth, startH = overlay.offsetHeight;
+    function onMove(ev) {
+        const dw = startX - ev.clientX;
+        const dh = startY - ev.clientY;
+        overlay.style.width = Math.max(300, startW + dw) + 'px';
+        overlay.style.height = Math.max(250, startH + dh) + 'px';
+    }
+    function onUp() {
+        _bubbleResizing = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        _saveBubbleSize();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+function _updateBubbleTitle() {
+    const folder = explorerCurrentFolder || 'INBOX';
+    document.getElementById('bubble-chat-title').textContent = `Assistant — ${folder}`;
+}
+function clearBubbleChat() {
+    _bubbleHistory = [];
+    if (_bubbleAbort) { _bubbleAbort.abort(); _bubbleAbort = null; }
+    const container = document.getElementById('bubble-chat-messages');
+    container.innerHTML = '<div class="chat-msg assistant"><div class="chat-md">Comment puis-je vous aider avec ce dossier ?</div></div>';
+    _updateBubbleTitle();
+}
+function stopBubbleChat() {
+    if (_bubbleAbort) { _bubbleAbort.abort(); _bubbleAbort = null; }
+}
+function _getBubbleContext() {
+    const parts = [];
+    if (explorerCurrentAccount) parts.push(`account_id=${explorerCurrentAccount}`);
+    if (explorerCurrentFolder) parts.push(`folder=${explorerCurrentFolder}`);
+    if (explorerCurrentStorage) parts.push(`storage=${explorerCurrentStorage}`);
+    return parts.join(', ') || 'INBOX';
+}
+async function sendBubbleChat() {
+    const input = document.getElementById('bubble-chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    const btn = document.getElementById('bubble-send-btn');
+    const stopBtn = document.getElementById('bubble-stop-btn');
+    btn.disabled = true; btn.textContent = '...';
+    stopBtn.style.display = 'inline-block';
+
+    const container = document.getElementById('bubble-chat-messages');
+    container.innerHTML += `<div class="chat-msg user">${esc(msg)}</div>`;
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-msg assistant';
+    typingEl.id = 'bubble-typing';
+    typingEl.innerHTML = '<div class="chat-typing"><span></span><span></span><span></span></div>';
+    container.appendChild(typingEl);
+    container.scrollTop = container.scrollHeight;
+
+    const defaultProv = aiProvidersCache.find(p => p.is_default);
+    const body = { message: msg, history: _bubbleHistory, context: _getBubbleContext() };
+    if (defaultProv) body.provider_id = defaultProv.id;
+
+    _bubbleAbort = new AbortController();
+    let fullText = '';
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const resp = await fetch(API + '/ai/chat/stream', {
+            method: 'POST', headers, body: JSON.stringify(body),
+            signal: _bubbleAbort.signal,
+        });
+        if (resp.status === 401) { logout(); throw new Error('Unauthorized'); }
+        if (!resp.ok) {
+            const text = await resp.text();
+            let detail;
+            try { detail = JSON.parse(text).detail; } catch(_) { detail = text; }
+            throw new Error(detail || `Erreur ${resp.status}`);
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let toolItems = [];
+        let pendingRender = false;
+
+        function _renderBubble() {
+            let html = '';
+            if (toolItems.length) {
+                html += `<div style="margin:4px 0;padding:4px 8px;border-left:2px solid #38bdf8;font-size:0.8em;opacity:0.8">`;
+                html += toolItems.map(ev => `<div>${esc(_renderToolLine(ev))}</div>`).join('');
+                html += `</div>`;
+            }
+            if (fullText.trim()) html += renderChatMd(fullText);
+            else if (!toolItems.length) html += '<p style="opacity:0.6;font-style:italic">L\'IA travaille...</p>';
+            typingEl.innerHTML = html;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const payload = line.slice(6);
+                if (payload === '[DONE]') break;
+                try {
+                    const data = JSON.parse(payload);
+                    if (data.heartbeat) continue;
+                    if (data.tools) {
+                        for (const ev of data.tools) {
+                            const idx = toolItems.findIndex(t => t.id === ev.id);
+                            if (idx >= 0) toolItems[idx] = ev; else toolItems.push(ev);
+                        }
+                        _renderBubble();
+                        continue;
+                    }
+                    if (data.progress) continue;
+                    if (data.error) throw new Error(data.error);
+                    if (data.text) {
+                        fullText += data.text;
+                        if (!pendingRender) {
+                            pendingRender = true;
+                            requestAnimationFrame(() => { _renderBubble(); pendingRender = false; });
+                        }
+                    }
+                } catch(pe) { if (pe.message !== payload) throw pe; }
+            }
+        }
+
+        if (!fullText) fullText = '*Aucune réponse.*';
+        typingEl.removeAttribute('id');
+        let finalHtml = '';
+        if (toolItems.length) {
+            finalHtml += `<div style="margin:4px 0;padding:4px 8px;border-left:2px solid #38bdf8;font-size:0.8em;opacity:0.8">`;
+            finalHtml += toolItems.map(ev => `<div>${esc(_renderToolLine(ev))}</div>`).join('');
+            finalHtml += `</div>`;
+        }
+        finalHtml += renderChatMd(fullText);
+        typingEl.innerHTML = finalHtml;
+        _bubbleHistory.push({ role: 'user', content: msg });
+        _bubbleHistory.push({ role: 'assistant', content: fullText });
+        if (_bubbleHistory.length > 20) _bubbleHistory = _bubbleHistory.slice(-20);
+    } catch(e) {
+        if (e.name === 'AbortError' && fullText) {
+            _bubbleHistory.push({ role: 'user', content: msg });
+            _bubbleHistory.push({ role: 'assistant', content: fullText + '\n\n*(interrompu)*' });
+        }
+        if (e.name !== 'AbortError') {
+            typingEl.removeAttribute('id');
+            typingEl.innerHTML = `<span style="color:#f87171">${esc(e.message)}</span>`;
+        }
+    } finally {
+        _bubbleAbort = null;
+        const stale = container.querySelector('#bubble-typing');
+        if (stale) { stale.removeAttribute('id'); if (!stale.textContent.trim()) stale.innerHTML = '<span style="color:#f87171">Interrompu.</span>'; }
+        btn.disabled = false; btn.textContent = 'Envoyer';
+        stopBtn.style.display = 'none';
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
 // === Rules ===
 async function loadRules() {
     try {
@@ -3015,10 +3538,37 @@ async function loadFolders() {
         document.getElementById('folder-actions').classList.remove('hidden');
         document.getElementById('btn-search-folders').style.display = 'inline-block';
         renderSearchFoldersList();
+        // Restore active folder highlight and expand parents
+        if (explorerCurrentFolder) {
+            document.querySelectorAll('.folder-item').forEach(el => {
+                if (el.dataset.path === explorerCurrentFolder && el.dataset.storage === explorerCurrentStorage) el.classList.add('active');
+            });
+            _expandParents(explorerCurrentFolder, explorerCurrentStorage);
+        }
+        // Load folder counts asynchronously (non-blocking)
+        _loadFolderCounts(accountId);
     } catch(e) {
         statusEl.textContent = '';
         treeEl.innerHTML = `<p style="color:#f87171;font-size:0.85rem">Erreur: ${esc(e.message)}</p>`;
     }
+}
+async function _loadFolderCounts(accountId) {
+    try {
+        const data = await api(`/accounts/${accountId}/folders-counts`);
+        if (!data.counts || accountId !== explorerCurrentAccount) return;
+        document.querySelectorAll('.folder-item[data-storage="imap"]').forEach(el => {
+            const path = el.dataset.path;
+            if (path && data.counts[path]) {
+                let badge = el.querySelector('.folder-count');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'folder-count';
+                    el.appendChild(badge);
+                }
+                badge.textContent = `(${data.counts[path]})`;
+            }
+        });
+    } catch(e) { /* counts are non-critical */ }
 }
 
 function flattenFolders(folders, result) {
@@ -3185,6 +3735,7 @@ function _onFolderCtx(e, el) {
     const hasSelection = selCount > 0;
     menu.innerHTML = `
         <div class="folder-ctx-item" onclick="_ctxCreateSubfolder('${escAttr(path)}')">📁 Nouveau sous-dossier</div>
+        ${path ? `<div class="folder-ctx-item" onclick="_ctxRenameFolder('${escAttr(path)}')">✏️ Renommer</div>` : ''}
         ${path ? `<div class="folder-ctx-item danger" onclick="_ctxDeleteFolder('${escAttr(path)}')">🗑️ Supprimer ce dossier</div>` : ''}
         ${hasSelection ? `<div class="folder-ctx-item danger" onclick="_bulkDeleteFolders()">🗑️ Supprimer les ${selCount} dossier(s)</div>` : ''}
     `;
@@ -3210,6 +3761,23 @@ async function _ctxCreateSubfolder(parentPath) {
         const accountId = document.getElementById('explorer-account').value;
         await api(`/accounts/${accountId}/create-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_name: fullPath }) });
         await loadFolders();
+    } catch(e) { alert('Erreur: ' + e.message); }
+}
+async function _ctxRenameFolder(path) {
+    _closeFolderCtx();
+    const sep = path.includes('.') ? '.' : '/';
+    const parts = path.split(sep);
+    const oldName = parts[parts.length - 1];
+    const newName = prompt('Nouveau nom :', oldName);
+    if (!newName || !newName.trim() || newName.trim() === oldName) return;
+    const parentPath = parts.slice(0, -1).join(sep);
+    const newFullPath = parentPath ? parentPath + sep + newName.trim() : newName.trim();
+    try {
+        const accountId = document.getElementById('explorer-account').value;
+        await api(`/accounts/${accountId}/rename-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_name: path, new_name: newFullPath }) });
+        if (explorerCurrentFolder === path) explorerCurrentFolder = newFullPath;
+        await loadFolders();
+        if (explorerCurrentFolder === newFullPath) loadMessages();
     } catch(e) { alert('Erreur: ' + e.message); }
 }
 async function _ctxDeleteFolder(path) {
@@ -3239,9 +3807,113 @@ function _onMailDragStart(e) {
     const checked = _getSelectedUids();
     const uids = checked.length > 0 && checked.includes(row.dataset.uid) ? checked : [row.dataset.uid];
     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'emails', uids, fromFolder: explorerCurrentFolder, storage: explorerCurrentStorage }));
-    e.dataTransfer.effectAllowed = 'move';
+    // Set URL so dropping on browser tab bar opens the email
+    const emailUrl = _buildEmailUrl(row.dataset.uid);
+    e.dataTransfer.setData('text/uri-list', emailUrl);
+    e.dataTransfer.effectAllowed = 'copyMove';
     row.classList.add('dragging');
     setTimeout(() => row.classList.remove('dragging'), 200);
+}
+// --- Single click vs double click on mail rows ---
+let _mailClickTimer = null;
+let _mailClickPending = null;
+function _mailRowClick(uid, rowEl) {
+    if (_mailClickTimer) { clearTimeout(_mailClickTimer); _mailClickTimer = null; _mailClickPending = null; return; }
+    _mailClickPending = { uid, rowEl };
+    _mailClickTimer = setTimeout(() => {
+        const p = _mailClickPending;
+        _mailClickTimer = null;
+        _mailClickPending = null;
+        if (p) openEmail(p.uid, p.rowEl);
+    }, 250);
+}
+function _mailRowDblClick(e, uid) {
+    e.stopPropagation();
+    if (_mailClickTimer) { clearTimeout(_mailClickTimer); _mailClickTimer = null; _mailClickPending = null; }
+    openEmailNewTab(uid);
+}
+
+function _buildEmailUrl(uid) {
+    const p = new URLSearchParams({
+        email: uid,
+        account: explorerCurrentAccount,
+        folder: explorerCurrentFolder,
+        storage: explorerCurrentStorage,
+    });
+    return location.origin + location.pathname + '?' + p.toString();
+}
+function openEmailNewTab(uid) {
+    window.open(_buildEmailUrl(uid), '_blank');
+}
+async function _openStandaloneEmail(uid, accountId, folder, storage, mode) {
+    // Set global state so existing openEmail/replyEmail/etc work
+    explorerCurrentAccount = accountId;
+    explorerCurrentFolder = folder;
+    explorerCurrentStorage = storage;
+    window._standaloneMode = true;
+
+    // Load accounts cache for compose (needed by replyAllEmail, openCompose)
+    try { accountsCache = await api('/accounts'); } catch(e) { accountsCache = []; }
+
+    // Hide sidebar, header, main content — show only reading overlay
+    document.querySelectorAll('header, .container, #app-view > *').forEach(el => el.style.display = 'none');
+
+    // Style reading-overlay as fullscreen page (not floating modal)
+    const overlay = document.getElementById('reading-overlay');
+    overlay.style.background = 'transparent';
+    const panel = overlay.querySelector('.modal-panel');
+    panel.classList.add('modal-fullscreen');
+
+    // Hide fullscreen button and replace close with "close tab"
+    overlay.querySelector('.modal-fullscreen-btn').style.display = 'none';
+    const closeBtn = overlay.querySelector('.modal-close');
+    closeBtn.onclick = () => window.close();
+    closeBtn.title = 'Fermer l\'onglet';
+
+    // Open email using the standard function
+    await openEmail(uid, null);
+
+    // Update tab title
+    if (currentEmailData) {
+        document.title = currentEmailData.subject || '(sans sujet)';
+    }
+
+    // In standalone mode, force compose overlay to fullscreen when it opens
+    const composeOverlay = document.getElementById('compose-overlay');
+    new MutationObserver(() => {
+        if (!composeOverlay.classList.contains('hidden')) {
+            composeOverlay.style.background = 'transparent';
+            const cp = composeOverlay.querySelector('.modal-panel');
+            cp.classList.add('modal-fullscreen');
+            composeOverlay.querySelector('.modal-fullscreen-btn').style.display = 'none';
+        }
+    }).observe(composeOverlay, { attributes: true, attributeFilter: ['class'] });
+
+    // Override closeCompose to go back to read view in standalone
+    const _origCloseCompose = closeCompose;
+    closeCompose = function() {
+        _origCloseCompose();
+        const p = new URLSearchParams({ email: uid, account: accountId, folder, storage });
+        location.href = location.pathname + '?' + p.toString();
+    };
+
+    // Override closeReadingPane to close tab
+    closeReadingPane = function() { window.close(); };
+
+    // Override deleteCurrentEmail to close tab after delete
+    const _origDelete = deleteCurrentEmail;
+    deleteCurrentEmail = async function() {
+        await _origDelete();
+        // After delete, update title and show message
+        document.title = '(supprime)';
+    };
+
+    // Auto-trigger compose mode if mode param present
+    if (mode && currentEmailData) {
+        if (mode === 'reply') replyEmail();
+        else if (mode === 'replyAll') replyAllEmail();
+        else if (mode === 'forward') forwardEmail();
+    }
 }
 function _onFolderDragStart(e, folderEl) {
     e.stopPropagation();
@@ -3301,19 +3973,22 @@ async function _onFolderDrop(e, folderEl) {
 }
 
 function _expandParents(path, storage) {
-    // Find the active folder-item and walk up the DOM to expand all folder-children ancestors
-    const activeEl = document.querySelector(`.folder-item[data-path="${CSS.escape(path)}"][data-storage="${storage}"]`);
+    if (!path) return;
+    // Find the active folder-item — use attribute selector with escaped value
+    let activeEl = null;
+    document.querySelectorAll('.folder-item').forEach(el => {
+        if (el.dataset.path === path && el.dataset.storage === storage) activeEl = el;
+    });
     if (!activeEl) return;
     let el = activeEl.parentElement;
     while (el) {
         if (el.classList && el.classList.contains('folder-children')) {
             el.style.display = 'block';
-            // Update toggle arrow
             const toggle = el.previousElementSibling?.querySelector('.folder-toggle');
-            if (toggle && toggle.innerHTML.includes('9654')) toggle.innerHTML = '&#9660;';
+            if (toggle) toggle.innerHTML = '&#9660;';
         }
+        if (el.id === 'explorer-tree') break;
         el = el.parentElement;
-        if (el && el.id === 'explorer-tree') break;
     }
 }
 
@@ -3332,6 +4007,7 @@ async function selectFolder(path, storage) {
     document.getElementById('explorer-search').value = '';
     document.getElementById('explorer-search-clear').style.display = 'none';
     ['filter-from','filter-subject','filter-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['filter-attachments','filter-replied'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('active'); });
     _mailSortCol = 'date'; _mailSortAsc = false;
     document.querySelectorAll('.mail-header-col').forEach(h => {
         const isDate = h.dataset.sort === 'date';
@@ -3689,8 +4365,14 @@ async function loadMessages(page) {
         if (ff) params.set(_isSentFolder(folder) ? 'filter_to' : 'filter_from', ff);
         if (fs) params.set('filter_subject', fs);
         if (fd) params.set('filter_date', fd);
+        const fAtt = document.getElementById('filter-attachments')?.classList.contains('active');
+        const fRep = document.getElementById('filter-replied')?.classList.contains('active');
+        if (fAtt) params.set('filter_attachments', 'true');
+        if (fRep) params.set('filter_replied', 'true');
+        if (_mailSortCol) params.set('sort_by', _mailSortCol);
+        params.set('sort_order', _mailSortAsc ? 'asc' : 'desc');
         const data = await api(`/accounts/${accountId}/messages?${params}`);
-        const hasFilter = !!(ff || fs || fd);
+        const hasFilter = !!(ff || fs || fd || fAtt || fRep);
         const label = explorerSearchQuery ? `${data.total} resultats` : hasFilter ? `${data.total} filtre(s)` : `${data.total} messages`;
         document.getElementById('explorer-folder-count').textContent = label;
 
@@ -3698,6 +4380,7 @@ async function loadMessages(page) {
         const isSent = _isSentFolder(folder);
         const fromHeader = document.querySelector('#mail-list-headers [data-sort="from"]');
         if (fromHeader) fromHeader.innerHTML = (isSent ? 'À' : 'De') + ' <span class="sort-arrow"></span>';
+        _updateSortArrows();
 
         if (!data.messages.length) {
             msgEl.innerHTML = '<p style="color:#64748b;padding:1rem">Dossier vide</p>';
@@ -3716,7 +4399,7 @@ async function loadMessages(page) {
                 if (m.has_attachments) icons += '<span class="icon-attach" title="Piece jointe">&#x1F4CE;</span>';
                 const flagPrefix = m.flagged ? '<span style="color:#ef4444;font-weight:bold" title="Important">! </span>' : '';
                 const personCol = isSent ? esc(m.to || '') : esc(m.from);
-                return `<div class="mail-row ${m.seen ? '' : 'unread'} ${isPinned ? 'pinned' : ''}" onclick="openEmail('${m.uid}', this)" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}" data-pinned="${isPinned}" draggable="true" ondragstart="_onMailDragStart(event)" style="grid-template-columns:20px auto 1fr 2fr auto">
+                return `<div class="mail-row ${m.seen ? '' : 'unread'} ${isPinned ? 'pinned' : ''}" onclick="_mailRowClick('${m.uid}', this)" ondblclick="_mailRowDblClick(event, '${m.uid}')" data-uid="${m.uid}" data-seen="${m.seen}" data-flagged="${m.flagged}" data-pinned="${isPinned}" draggable="true" ondragstart="_onMailDragStart(event)" style="grid-template-columns:20px auto 1fr 2fr auto">
                     <input type="checkbox" class="mail-row-cb" onclick="event.stopPropagation();onRowCheckChange()" data-uid="${m.uid}">
                     <div class="mail-icons">${icons}</div>
                     <div class="mail-from">${personCol}</div>
@@ -3925,31 +4608,30 @@ function togglePreviewFullscreen() {
 }
 
 // Sort & filter for mail list
-let _mailSortCol = null, _mailSortAsc = true;
+let _mailSortCol = 'date', _mailSortAsc = false;
 function sortMailColumn(col) {
     if (_mailSortCol === col) _mailSortAsc = !_mailSortAsc;
-    else { _mailSortCol = col; _mailSortAsc = true; }
+    else { _mailSortCol = col; _mailSortAsc = col !== 'date'; }
+    _updateSortArrows();
+    explorerCurrentPage = 0;
+    loadMessages(0);
+}
+function _updateSortArrows() {
     document.querySelectorAll('.mail-header-col').forEach(h => {
-        h.classList.toggle('sorted', h.dataset.sort === col);
+        h.classList.toggle('sorted', h.dataset.sort === _mailSortCol);
         const arrow = h.querySelector('.sort-arrow');
-        if (arrow) arrow.textContent = h.dataset.sort === col ? (_mailSortAsc ? '\u25B2' : '\u25BC') : '';
+        if (arrow) arrow.textContent = h.dataset.sort === _mailSortCol ? (_mailSortAsc ? '\u25B2' : '\u25BC') : '';
     });
-    const msgEl = document.getElementById('explorer-messages');
-    const rows = [...msgEl.querySelectorAll('.mail-row')];
-    rows.sort((a, b) => {
-        let va = '', vb = '';
-        if (col === 'from') { va = a.querySelector('.mail-from')?.textContent || ''; vb = b.querySelector('.mail-from')?.textContent || ''; }
-        else if (col === 'subject') { va = a.querySelector('.mail-subject')?.textContent || ''; vb = b.querySelector('.mail-subject')?.textContent || ''; }
-        else if (col === 'date') { va = a.querySelector('.mail-date')?.textContent || ''; vb = b.querySelector('.mail-date')?.textContent || ''; }
-        const cmp = va.localeCompare(vb, undefined, { sensitivity: 'base' });
-        return _mailSortAsc ? cmp : -cmp;
-    });
-    rows.forEach(r => msgEl.appendChild(r));
 }
 
 function filterMailRows() {
     explorerCurrentPage = 0;
     loadMessages(0);
+}
+
+function toggleFilterBtn(btn) {
+    btn.classList.toggle('active');
+    filterMailRows();
 }
 
 // Resize handle for split pane
@@ -4190,6 +4872,27 @@ async function openCompose(prefill) {
     document.getElementById('compose-attachments-list').innerHTML = '';
     document.getElementById('compose-files').value = '';
 
+    // Pre-load forwarded attachments
+    if (prefill.forwardAttachments && prefill.forwardAttachments.length) {
+        const listEl = document.getElementById('compose-attachments-list');
+        listEl.innerHTML = '<span style="color:#94a3b8;font-size:0.8rem">Chargement des pieces jointes...</span>';
+        (async () => {
+            for (const att of prefill.forwardAttachments) {
+                try {
+                    const params = new URLSearchParams({ folder: att.folder, storage: att.storage });
+                    const resp = await apiRaw(`/accounts/${att.accountId}/message/${att.uid}/attachment/${att.index}?${params}`);
+                    if (!resp.ok) continue;
+                    const blob = await resp.blob();
+                    const b64 = await new Promise(resolve => {
+                        const r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.readAsDataURL(blob);
+                    });
+                    composeAttachments.push({ filename: att.filename, data_base64: b64, size: att.size });
+                } catch (e) { console.warn('Failed to load forwarded attachment:', att.filename, e); }
+            }
+            renderComposeAttachments();
+        })();
+    }
+
     // Store reply metadata
     const overlay = document.getElementById('compose-overlay');
     overlay.dataset.inReplyTo = prefill.in_reply_to || '';
@@ -4301,7 +5004,13 @@ function forwardEmail() {
         De: ${esc(d.from)}<br>A: ${esc(d.to)}<br>${d.cc ? 'Cc: ' + esc(d.cc) + '<br>' : ''}Date: ${esc(d.date)}<br>Objet: ${esc(d.subject)}</p>
         ${d.body_html || '<pre>' + esc(d.body_text || '') + '</pre>'}
     </div>`;
-    openCompose({ title: 'Transferer', subject, body_html: fwdHtml });
+    // Pass original attachment metadata for pre-loading
+    const fwdAttachments = (d.attachments && d.attachments.length) ? d.attachments.map((a, idx) => ({
+        filename: a.filename, size: a.size, index: idx,
+        accountId: explorerCurrentAccount, uid: d.uid,
+        folder: explorerCurrentFolder, storage: explorerCurrentStorage,
+    })) : [];
+    openCompose({ title: 'Transferer', subject, body_html: fwdHtml, forwardAttachments: fwdAttachments });
     if (wasFullscreen) {
         const panel = document.querySelector('#compose-overlay .modal-panel');
         if (panel) { panel.classList.add('modal-fullscreen'); const btn = panel.querySelector('.modal-fullscreen-btn'); if (btn) { btn.textContent = '\u2750'; btn.title = 'Restaurer'; } }
@@ -4437,6 +5146,7 @@ async function saveDraft() {
 async function loadAdminPanel() {
     loadAdminSettings();
     loadAdminUsers();
+    loadAIProviders();
 }
 
 async function loadAdminSettings() {

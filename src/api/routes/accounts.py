@@ -1,5 +1,6 @@
 import imaplib
 import logging
+import time as _time_mod
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
@@ -303,53 +304,52 @@ async def delete_account(
 # Folder browsing — using query params to avoid URL encoding issues with /
 # ---------------------------------------------------------------------------
 
+# In-memory caches
+_folder_list_cache: dict[int, tuple[float, list]] = {}  # {account_id: (ts, raw_folders)}
+_folder_counts_cache: dict[int, tuple[float, dict]] = {}  # {account_id: (ts, counts)}
+_FOLDER_LIST_TTL = 120  # folder structure changes rarely
+_FOLDER_COUNTS_TTL = 60  # counts can update more frequently
+
+
 @router.get("/{account_id}/folders")
 async def list_folders(
     account_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all IMAP folders for an account — live from the mail server."""
+    """List IMAP folders — fast, no STATUS calls. Use /folders-counts for message counts."""
     account = await _get_account(account_id, user, db)
-    from src.imap.manager import IMAPManager, IMAPConfig
-    from src.security import decrypt_value as _dec
-    config = IMAPConfig(
-        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
-        user=account.imap_user, password=_dec(account.imap_password_encrypted),
-    )
-    try:
-        with IMAPManager(config) as imap:
-            raw_folders = imap.list_folders()
-            conn = imap._conn
-            # Get message count per folder via STATUS
-            folder_counts = {}
-            for f in raw_folders:
-                fname = f["name"]
-                try:
-                    st, sdata = conn.status(_imap_quote(fname), "(MESSAGES)")
-                    if st == "OK" and sdata:
-                        import re as _re
-                        m = _re.search(r'MESSAGES\s+(\d+)', sdata[0].decode())
-                        if m:
-                            folder_counts[fname] = int(m.group(1))
-                except Exception:
-                    pass
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP connection failed: {e}")
+
+    now = _time_mod.time()
+    cached = _folder_list_cache.get(account_id)
+    if cached and (now - cached[0]) < _FOLDER_LIST_TTL:
+        raw_folders = cached[1]
+    else:
+        from src.imap.manager import IMAPManager, IMAPConfig
+        from src.security import decrypt_value as _dec
+        config = IMAPConfig(
+            host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+            user=account.imap_user, password=_dec(account.imap_password_encrypted),
+        )
+        try:
+            with IMAPManager(config) as imap:
+                raw_folders = imap.list_folders()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"IMAP connection failed: {e}")
+        _folder_list_cache[account_id] = (now, raw_folders)
 
     separator = raw_folders[0]["separator"] if raw_folders else "."
     tree = _build_folder_tree(raw_folders)
 
-    # Add storage tag and message count to IMAP folder nodes
     def _tag_imap(nodes):
         for n in nodes:
             n["storage"] = "imap"
-            n["count"] = folder_counts.get(n.get("path", ""), 0)
+            n["count"] = 0
             if n.get("children"):
                 _tag_imap(n["children"])
     _tag_imap(tree)
 
-    # Query local folders for this account
+    # Query local folders
     local_result = await db.execute(
         select(LocalFolder).where(LocalFolder.account_id == account_id).order_by(LocalFolder.path)
     )
@@ -359,6 +359,58 @@ async def list_folders(
         local_tree.append({"name": lf.name, "path": lf.path, "storage": "local", "children": []})
 
     return {"account_id": account_id, "account_name": account.name, "folders": tree, "local_folders": local_tree, "separator": separator}
+
+
+@router.get("/{account_id}/folders-counts")
+async def list_folders_counts(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get message counts per folder — separate endpoint loaded asynchronously."""
+    account = await _get_account(account_id, user, db)
+
+    now = _time_mod.time()
+    cached = _folder_counts_cache.get(account_id)
+    if cached and (now - cached[0]) < _FOLDER_COUNTS_TTL:
+        return {"counts": cached[1]}
+
+    from src.imap.manager import IMAPManager, IMAPConfig
+    from src.security import decrypt_value as _dec
+    import re as _re
+    import concurrent.futures
+
+    config = IMAPConfig(
+        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+        user=account.imap_user, password=_dec(account.imap_password_encrypted),
+    )
+
+    def _fetch_counts():
+        counts = {}
+        with IMAPManager(config) as imap:
+            raw_folders = imap.list_folders()
+            conn = imap._conn
+            for f in raw_folders:
+                fname = f["name"]
+                try:
+                    st, sdata = conn.status(_imap_quote(fname), "(MESSAGES)")
+                    if st == "OK" and sdata:
+                        m = _re.search(r'MESSAGES\s+(\d+)', sdata[0].decode())
+                        if m:
+                            counts[fname] = int(m.group(1))
+                except Exception:
+                    pass
+        return counts
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        folder_counts = await loop.run_in_executor(None, _fetch_counts)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+
+    _folder_counts_cache[account_id] = (now, folder_counts)
+    return {"counts": folder_counts}
 
 
 class CreateFolderRequest(BaseModel):
@@ -389,6 +441,8 @@ async def create_folder(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+    _folder_list_cache.pop(account_id, None)
+    _folder_counts_cache.pop(account_id, None)
     return {"status": "created", "folder": req.folder_name}
 
 
@@ -425,6 +479,8 @@ async def delete_folder(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+    _folder_list_cache.pop(account_id, None)
+    _folder_counts_cache.pop(account_id, None)
     return {"status": "deleted", "folder": req.folder_name}
 
 
@@ -462,6 +518,8 @@ async def rename_folder(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+    _folder_list_cache.pop(account_id, None)
+    _folder_counts_cache.pop(account_id, None)
     return {"status": "renamed", "old_name": req.old_name, "new_name": req.new_name}
 
 
@@ -510,6 +568,10 @@ async def list_messages(
     filter_to: str = Query("", description="Filter by recipient (substring)"),
     filter_subject: str = Query("", description="Filter by subject (substring)"),
     filter_date: str = Query("", description="Filter by date (substring)"),
+    filter_replied: bool = Query(False, description="Filter only replied messages"),
+    filter_attachments: bool = Query(False, description="Filter only messages with attachments"),
+    sort_by: str = Query("date", description="Sort column: date, from, subject"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -535,15 +597,22 @@ async def list_messages(
             local_filters.append(LocalEmail.subject.ilike(f"%{filter_subject}%"))
         if filter_date:
             local_filters.append(cast(LocalEmail.date, String).ilike(f"%{filter_date}%"))
+        if filter_replied:
+            local_filters.append(LocalEmail.answered == True)
+        if filter_attachments:
+            local_filters.append(LocalEmail.has_attachments == True)
 
         count_result = await db.execute(
             select(sa_func.count()).where(*local_filters)
         )
         total = count_result.scalar()
 
+        _local_sort_map = {"date": LocalEmail.date, "from": LocalEmail.from_addr, "subject": LocalEmail.subject}
+        _sort_col = _local_sort_map.get(sort_by, LocalEmail.date)
+        _order = _sort_col.asc() if sort_order == "asc" else _sort_col.desc()
         emails_result = await db.execute(
             select(LocalEmail).where(*local_filters)
-            .order_by(LocalEmail.date.desc())
+            .order_by(_order)
             .offset(page * size).limit(size)
         )
         emails = emails_result.scalars().all()
@@ -608,6 +677,8 @@ async def list_messages(
                 search_parts.append(f'TO "{filter_to.replace(chr(34), "")}"')
             if filter_subject:
                 search_parts.append(f'SUBJECT "{filter_subject.replace(chr(34), "")}"')
+            if filter_replied:
+                search_parts.append('ANSWERED')
 
             if search_parts:
                 criteria = ' '.join(search_parts)
@@ -665,75 +736,139 @@ async def list_messages(
                     if fd_lower in _parse_idate(idate).strftime("%Y-%m-%d %H:%M").lower()
                 ]
 
+            # Server-side sort by from/subject requires fetching headers for all UIDs
+            if sort_by in ("from", "subject") and uid_dates:
+                header_field = "FROM" if sort_by == "from" else "SUBJECT"
+                all_uids = [e[0] for e in uid_dates]
+                uid_sort_keys = {}
+                # Fetch in chunks of 200
+                for ci in range(0, len(all_uids), 200):
+                    chunk = all_uids[ci:ci + 200]
+                    uid_set = ",".join(chunk)
+                    st_h, dt_h = conn.uid("FETCH", uid_set, f"(UID BODY.PEEK[HEADER.FIELDS ({header_field})])")
+                    if st_h == "OK" and dt_h:
+                        hi = 0
+                        while hi < len(dt_h):
+                            h_item = dt_h[hi]
+                            if isinstance(h_item, tuple) and len(h_item) == 2:
+                                h_meta = h_item[0].decode() if isinstance(h_item[0], bytes) else str(h_item[0])
+                                h_bytes = h_item[1]
+                                h_uid_m = re.search(r'UID (\d+)', h_meta)
+                                if h_uid_m:
+                                    h_msg = email_mod.message_from_bytes(h_bytes)
+                                    val = _decode_header(h_msg.get(header_field, ""))
+                                    uid_sort_keys[h_uid_m.group(1)] = val.lower()
+                            hi += 1
+                reverse = sort_order == "desc"
+                uid_dates.sort(key=lambda x: uid_sort_keys.get(x[0], ""), reverse=reverse)
+            elif sort_by == "date" and sort_order == "asc":
+                uid_dates.reverse()
+
             total = len(uid_dates)
 
-            if not q and not filter_from and not filter_to and not filter_subject and not filter_date and exists_count and total != exists_count:
+            if not q and not filter_from and not filter_to and not filter_subject and not filter_date and not filter_replied and exists_count and total != exists_count:
                 logger.warning("FETCH returned %d UIDs but SELECT EXISTS=%d for folder %s", total, exists_count, folder)
 
-            # Paginate the date-sorted list
-            page_start = page * size
-            page_entries = uid_dates[page_start:page_start + size]
-            page_uids = [e[0] for e in page_entries]
-            # Build a map of UID -> INTERNALDATE for display
-            idate_map = {e[0]: e[1] for e in page_entries}
-
-            messages = []
-            if page_uids:
-                uid_range = ",".join(page_uids)
-                status, data = conn.uid("FETCH", uid_range, "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
-                if status == "OK" and data:
-                    i = 0
-                    while i < len(data):
-                        item = data[i]
+            def _fetch_messages(uids_to_fetch, idate_lookup):
+                """Fetch full message data for a list of UIDs."""
+                result = []
+                if not uids_to_fetch:
+                    return result
+                uid_range = ",".join(uids_to_fetch)
+                st, dt = conn.uid("FETCH", uid_range, "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
+                if st == "OK" and dt:
+                    j = 0
+                    while j < len(dt):
+                        item = dt[j]
                         if isinstance(item, tuple) and len(item) == 2:
                             meta_line = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
                             header_bytes = item[1]
-
                             uid = ""
                             flags_str = ""
-                            uid_match = re.search(r'UID (\d+)', meta_line)
-                            if uid_match:
-                                uid = uid_match.group(1)
-                            flags_match = re.search(r'FLAGS \(([^)]*)\)', meta_line)
-                            if flags_match:
-                                flags_str = flags_match.group(1)
-
+                            um = re.search(r'UID (\d+)', meta_line)
+                            if um:
+                                uid = um.group(1)
+                            fm = re.search(r'FLAGS \(([^)]*)\)', meta_line)
+                            if fm:
+                                flags_str = fm.group(1)
                             msg = email_mod.message_from_bytes(header_bytes)
                             from_addr = _decode_header(msg.get("From", ""))
                             to_addr = _decode_header(msg.get("To", ""))
                             subject = _decode_header(msg.get("Subject", ""))
-
-                            # Use INTERNALDATE for display (matches webmail order)
                             date_str = ""
-                            idate_raw = idate_map.get(uid, "")
+                            idate_raw = idate_lookup.get(uid, "")
                             if idate_raw:
                                 try:
                                     idt = _parse_idate(idate_raw)
                                     date_str = idt.strftime("%Y-%m-%d %H:%M")
                                 except Exception:
                                     date_str = idate_raw
-
                             seen = "\\Seen" in flags_str
                             flagged = "\\Flagged" in flags_str
                             answered = "\\Answered" in flags_str
                             has_att = 'attachment' in meta_line.lower() or '"attachment"' in meta_line.lower()
-
-                            messages.append({
-                                "uid": uid,
-                                "from": from_addr,
-                                "to": to_addr,
-                                "subject": subject,
-                                "date": date_str,
-                                "seen": seen,
-                                "flagged": flagged,
-                                "answered": answered,
-                                "has_attachments": has_att,
+                            result.append({
+                                "uid": uid, "from": from_addr, "to": to_addr,
+                                "subject": subject, "date": date_str,
+                                "seen": seen, "flagged": flagged,
+                                "answered": answered, "has_attachments": has_att,
                             })
-                        i += 1
+                        j += 1
+                uid_order = {u: idx for idx, u in enumerate(uids_to_fetch)}
+                result.sort(key=lambda m: uid_order.get(m["uid"], 999))
+                return result
 
-            # Re-sort messages to match the INTERNALDATE order
-            uid_order = {uid: idx for idx, uid in enumerate(page_uids)}
-            messages.sort(key=lambda m: uid_order.get(m["uid"], 999))
+            # Build post-fetch filter for precise display-value matching
+            def _display_name(addr):
+                """Extract display name from 'Name <email>' or just return as-is."""
+                if '<' in addr:
+                    name = addr[:addr.index('<')].strip().strip('"').strip("'")
+                    if name:
+                        return name
+                return addr
+
+            _post_filters = []
+            if filter_from:
+                _ff = filter_from.lower()
+                _post_filters.append(lambda m, _f=_ff: _f in _display_name(m["from"]).lower())
+            if filter_to:
+                _ft = filter_to.lower()
+                _post_filters.append(lambda m, _f=_ft: _f in _display_name(m["to"]).lower())
+            if filter_subject:
+                _fsub = filter_subject.lower()
+                _post_filters.append(lambda m, _f=_fsub: _f in m["subject"].lower())
+            if filter_attachments:
+                _post_filters.append(lambda m: m["has_attachments"])
+
+            def _post_filter(m):
+                return all(f(m) for f in _post_filters)
+
+            if _post_filters:
+                # Scan batches to find messages passing all post-filters
+                batch_size = 100
+                messages = []
+                filtered_total = 0
+                skip = page * size
+                for batch_start in range(0, total, batch_size):
+                    batch_entries = uid_dates[batch_start:batch_start + batch_size]
+                    batch_uids = [e[0] for e in batch_entries]
+                    idate_map = {e[0]: e[1] for e in batch_entries}
+                    batch_msgs = _fetch_messages(batch_uids, idate_map)
+                    for m in batch_msgs:
+                        if _post_filter(m):
+                            filtered_total += 1
+                            if filtered_total > skip and len(messages) < size:
+                                messages.append(m)
+                    if len(messages) >= size and filtered_total > skip + size:
+                        break
+                total = filtered_total
+            else:
+                # Standard pagination — no post-filters needed
+                page_start = page * size
+                page_entries = uid_dates[page_start:page_start + size]
+                page_uids = [e[0] for e in page_entries]
+                idate_map = {e[0]: e[1] for e in page_entries}
+                messages = _fetch_messages(page_uids, idate_map)
 
     except HTTPException:
         raise

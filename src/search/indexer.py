@@ -171,7 +171,16 @@ async def search_emails(
     if account_id:
         filters.append({"term": {"account_id": account_id}})
     if folder:
-        filters.append({"term": {"folder": folder}})
+        # Support both UTF-8 display names and legacy IMAP UTF-7 in ES
+        from src.imap.manager import _encode_imap_utf7
+        utf7 = _encode_imap_utf7(folder)
+        if utf7 != folder:
+            filters.append({"bool": {"should": [
+                {"term": {"folder": folder}},
+                {"term": {"folder": utf7}},
+            ], "minimum_should_match": 1}})
+        else:
+            filters.append({"term": {"folder": folder}})
     if from_addr:
         filters.append({"wildcard": {"from_addr": f"*{from_addr}*"}})
     if has_attachments is not None:
