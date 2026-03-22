@@ -14,7 +14,7 @@ from src.security import (
     hash_password, verify_password, create_access_token,
     create_reset_token, decode_reset_token, decrypt_value,
 )
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, get_current_admin
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -58,10 +58,17 @@ class UserResponse(BaseModel):
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(
+    req: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
     existing = await db.execute(select(User).where(User.email == req.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     user = User(
         email=req.email,

@@ -1024,8 +1024,9 @@ async def create_folder(
 async def delete_folder(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder_name: Annotated[str, Field(description="Full folder path to delete (use display name with accents). Delete deepest subfolders first.")],
+    force: Annotated[bool, Field(description="If True, empty the folder before deleting")] = False,
 ) -> dict:
-    """Delete an IMAP folder. The folder should be empty. Delete children before parents."""
+    """Delete an IMAP folder. If it contains emails and force=False, returns not_empty status with count. Use force=True to empty and delete."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
@@ -1037,6 +1038,25 @@ async def delete_folder(
     imap = get_imap(account)
     imap.connect()
     try:
+        from src.imap.manager import _imap_quote
+        conn = imap._conn
+        status, resp = conn.select(_imap_quote(folder_name))
+        msg_count = 0
+        if status == "OK" and resp and resp[0]:
+            msg_count = int(resp[0])
+        conn.close()
+        if msg_count > 0 and not force:
+            return {"status": "not_empty", "folder": folder_name, "count": msg_count}
+        if msg_count > 0 and force:
+            conn.select(_imap_quote(folder_name))
+            st, data = conn.uid("SEARCH", None, "ALL")
+            if st == "OK" and data[0]:
+                uids = data[0].decode().split()
+                for i in range(0, len(uids), 50):
+                    batch = ",".join(uids[i:i+50])
+                    conn.uid("STORE", batch, "+FLAGS", "(\\Deleted)")
+                conn.expunge()
+            conn.close()
         ok = imap.delete_folder(folder_name)
         return {"status": "deleted" if ok else "failed", "folder": folder_name}
     finally:

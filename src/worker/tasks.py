@@ -10,7 +10,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from src.worker.app import app
-from src.db.models import MailAccount, AIRule, ProcessingLog, User
+from src.db.models import MailAccount, AIRule, ClassicRule, ProcessingLog, User, SpamWhitelist, SpamBlacklist
 from src.imap.manager import IMAPManager, IMAPConfig, _decode_imap_utf7
 from src.search.indexer import get_es_client, ensure_index, index_email, bulk_index_emails
 from src.rules.parser import parse_rules_markdown
@@ -93,7 +93,7 @@ async def _sync_account(db, account: MailAccount):
     es = await get_es_client()
     await ensure_index(es, account.user_id)
 
-    # Get user's active rules
+    # Get user's active AI rules
     rules_result = await db.execute(
         select(AIRule).where(
             AIRule.user_id == account.user_id,
@@ -115,6 +115,28 @@ async def _sync_account(db, account: MailAccount):
             llm = await get_llm_for_user(db, user)
         except Exception as e:
             logger.warning(f"Could not get LLM for user {account.user_id}: {e}")
+
+    # Get user's active classic rules
+    classic_result = await db.execute(
+        select(ClassicRule).where(
+            ClassicRule.user_id == account.user_id,
+            ClassicRule.is_active.is_(True),
+        ).order_by(ClassicRule.priority)
+    )
+    classic_rules = classic_result.scalars().all()
+
+    # Load spam whitelist/blacklist for classic rule evaluation
+    wl_set = set()
+    bl_set = set()
+    if classic_rules:
+        wl_result = await db.execute(
+            select(SpamWhitelist).where(SpamWhitelist.account_id == account.id)
+        )
+        wl_set = {e.value for e in wl_result.scalars().all()}
+        bl_result = await db.execute(
+            select(SpamBlacklist).where(SpamBlacklist.account_id == account.id)
+        )
+        bl_set = {e.value for e in bl_result.scalars().all()}
 
     # Per-folder UID tracking (replaces UNKEYWORD which OVH doesn't support)
     sync_state = dict(account.sync_state or {})
@@ -169,7 +191,7 @@ async def _sync_account(db, account: MailAccount):
                                 except Exception:
                                     pass
 
-                    # Apply rules (only on emails that need AI)
+                    # Apply AI rules
                     if parsed_rules:
                         for ctx in batch_contexts:
                             try:
@@ -178,6 +200,22 @@ async def _sync_account(db, account: MailAccount):
                                     await _execute_actions(imap, db, account, ctx, match)
                             except Exception as e:
                                 logger.error(f"Rule error for UID {ctx.uid} in {folder}: {e}")
+
+                    # Apply classic rules
+                    if classic_rules:
+                        try:
+                            from src.api.routes.rules import apply_classic_rules_on_sync
+                            result = apply_classic_rules_on_sync(
+                                imap, folder, batch_uids, classic_rules,
+                                whitelist=wl_set, blacklist=bl_set,
+                            )
+                            if result["matched"]:
+                                logger.info(
+                                    f"Classic rules: {result['matched']} matched, "
+                                    f"{result['actions_taken']} actions in {folder}"
+                                )
+                        except Exception as e:
+                            logger.error(f"Classic rule error in {folder}: {e}")
 
                     # Save progress after each batch
                     sync_state[folder] = batch_uids[-1]
