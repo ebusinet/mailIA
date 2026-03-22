@@ -4,12 +4,14 @@ import time as _time_mod
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
+from starlette.concurrency import iterate_in_threadpool
+from starlette.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, cast, String
 
 from src.db.session import get_db
-from src.db.models import User, MailAccount, LocalFolder, LocalEmail
+from src.db.models import User, MailAccount, LocalFolder, LocalEmail, SpamWhitelist, SpamBlacklist
 from src.api.deps import get_current_user
 from src.security import encrypt_value
 from src.imap.manager import _imap_quote
@@ -88,11 +90,27 @@ class SaveDraftRequest(BaseModel):
     body_html: str = ""
     attachments: list[dict] = []
     priority: str | None = None
+    in_reply_to: str | None = None
+    references: str | None = None
 
 
 class FlagRequest(BaseModel):
     flag: str  # "seen", "flagged"
     action: str = "add"  # "add" or "remove"
+
+
+class SpamScanRequest(BaseModel):
+    folders: list[str] = []  # Empty = all folders
+
+
+class WhitelistAddRequest(BaseModel):
+    entry_type: str  # "email" or "domain"
+    value: str
+
+class WhitelistEntry(BaseModel):
+    id: int
+    entry_type: str
+    value: str
 
 
 class MoveRequest(BaseModel):
@@ -413,6 +431,408 @@ async def list_folders_counts(
     return {"counts": folder_counts}
 
 
+@router.post("/{account_id}/spam-scan")
+async def spam_scan(
+    account_id: int,
+    req: SpamScanRequest,
+    stream: bool = Query(False),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Scan specified folders (or all) for spam emails using SpamAssassin headers."""
+    account = await _get_account(account_id, user, db)
+    wl_result = await db.execute(
+        select(SpamWhitelist).where(SpamWhitelist.account_id == account_id)
+    )
+    _wl_set = {e.value for e in wl_result.scalars().all()}
+    bl_result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.account_id == account_id)
+    )
+    _bl_set = {e.value for e in bl_result.scalars().all()}
+    from src.imap.manager import IMAPManager, IMAPConfig
+    from src.security import decrypt_value as _dec
+    import email as email_mod
+    import re as _re
+
+    config = IMAPConfig(
+        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+        user=account.imap_user, password=_dec(account.imap_password_encrypted),
+    )
+
+    target_folders = req.folders
+
+    def _do_scan_stream():
+        import json
+        from src.imap.manager import IMAPManager, IMAPConfig
+        from src.security import decrypt_value as _dec
+        import email as email_mod
+        import re as _re
+
+        config = IMAPConfig(
+            host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+            user=account.imap_user, password=_dec(account.imap_password_encrypted),
+        )
+        try:
+            total_scanned = 0
+            total_spam = 0
+            with IMAPManager(config) as imap:
+                conn = imap._conn
+                if not target_folders:
+                    raw_folders = imap.list_folders()
+                    folders_to_scan = [f["name"] for f in raw_folders]
+                else:
+                    folders_to_scan = target_folders
+
+                for fname in folders_to_scan:
+                    try:
+                        st, _ = _select_folder(conn, fname, readonly=True)
+                        if st != "OK":
+                            continue
+                        st2, data = conn.uid("SEARCH", None, "ALL")
+                        if st2 != "OK" or not data[0]:
+                            yield json.dumps({"type": "folder_done", "folder": fname, "total": 0, "spam_count": 0, "spam_uids": [], "spam_details": []}) + "\n"
+                            continue
+                        all_uids = data[0].split()
+                        folder_total = len(all_uids)
+                        yield json.dumps({"type": "folder_start", "folder": fname, "total": folder_total}) + "\n"
+                        spam_uids = []
+                        spam_details = []
+
+                        batch_size = 200
+                        for i in range(0, len(all_uids), batch_size):
+                            batch = all_uids[i:i+batch_size]
+                            uid_range = b",".join(batch)
+                            st3, fdata = conn.uid(
+                                "FETCH", uid_range,
+                                "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT X-Spam-Status X-Spam-Flag X-Spam-Score Authentication-Results Precedence X-Mailer Message-ID X-VR-SPAMSCORE)])"
+                            )
+                            if st3 != "OK" or not fdata:
+                                continue
+                            j = 0
+                            while j < len(fdata):
+                                item = fdata[j]
+                                if isinstance(item, tuple) and len(item) == 2:
+                                    meta_line = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                                    header_bytes = item[1]
+                                    uid = ""
+                                    flags_str = ""
+                                    um = _re.search(r'UID (\d+)', meta_line)
+                                    if um:
+                                        uid = um.group(1)
+                                    fm = _re.search(r'FLAGS \(([^)]*)\)', meta_line)
+                                    if fm:
+                                        flags_str = fm.group(1)
+                                    msg = email_mod.message_from_bytes(header_bytes)
+                                    analysis = _spam_analysis(msg, flags_str, whitelist=_wl_set, blacklist=_bl_set)
+                                    if analysis["is_spam"]:
+                                        from_hdr = _decode_header(msg.get("From", "") or "")
+                                        subj_hdr = _decode_header(msg.get("Subject", "") or "")
+                                        spam_uids.append(uid)
+                                        spam_details.append({
+                                            "uid": uid,
+                                            "from": from_hdr[:80],
+                                            "subject": subj_hdr[:100],
+                                            "score": analysis["score"],
+                                            "reasons": analysis["reasons"],
+                                        })
+                                j += 1
+
+                            scanned = min(i + batch_size, folder_total)
+                            yield json.dumps({"type": "progress", "folder": fname, "scanned": scanned, "total": folder_total, "spam_found": len(spam_uids)}) + "\n"
+
+                        total_scanned += folder_total
+                        total_spam += len(spam_uids)
+                        yield json.dumps({"type": "folder_done", "folder": fname, "total": folder_total, "spam_count": len(spam_uids), "spam_uids": spam_uids, "spam_details": spam_details}) + "\n"
+                    except Exception as e:
+                        logger.warning(f"Spam scan stream failed for folder {fname}: {e}")
+                        yield json.dumps({"type": "folder_done", "folder": fname, "total": 0, "spam_count": 0, "spam_uids": [], "spam_details": [], "error": str(e)}) + "\n"
+
+            yield json.dumps({"type": "result", "total_scanned": total_scanned, "total_spam": total_spam}) + "\n"
+        except Exception as e:
+            logger.error(f"Spam scan stream error: {e}", exc_info=True)
+            yield json.dumps({"type": "error", "detail": str(e)}) + "\n"
+
+    def _do_scan():
+        results = {}
+        total_scanned = 0
+        total_spam = 0
+        with IMAPManager(config) as imap:
+            conn = imap._conn
+            # If no folders specified, list all folders
+            if not target_folders:
+                raw_folders = imap.list_folders()
+                folders_to_scan = [f["name"] for f in raw_folders]
+            else:
+                folders_to_scan = target_folders
+
+            for fname in folders_to_scan:
+                try:
+                    st, _ = _select_folder(conn, fname, readonly=True)
+                    if st != "OK":
+                        continue
+                    # Search all messages
+                    st2, data = conn.uid("SEARCH", None, "ALL")
+                    if st2 != "OK" or not data[0]:
+                        results[fname] = {"total": 0, "spam_count": 0, "spam_uids": []}
+                        continue
+                    all_uids = data[0].split()
+                    folder_total = len(all_uids)
+                    spam_uids = []
+                    spam_details = []
+
+                    # Fetch in batches of 200
+                    batch_size = 200
+                    for i in range(0, len(all_uids), batch_size):
+                        batch = all_uids[i:i+batch_size]
+                        uid_range = b",".join(batch)
+                        st3, fdata = conn.uid(
+                            "FETCH", uid_range,
+                            "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT X-Spam-Status X-Spam-Flag X-Spam-Score Authentication-Results Precedence X-Mailer Message-ID X-VR-SPAMSCORE)])"
+                        )
+                        if st3 != "OK" or not fdata:
+                            continue
+                        j = 0
+                        while j < len(fdata):
+                            item = fdata[j]
+                            if isinstance(item, tuple) and len(item) == 2:
+                                meta_line = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                                header_bytes = item[1]
+                                uid = ""
+                                flags_str = ""
+                                um = _re.search(r'UID (\d+)', meta_line)
+                                if um:
+                                    uid = um.group(1)
+                                fm = _re.search(r'FLAGS \(([^)]*)\)', meta_line)
+                                if fm:
+                                    flags_str = fm.group(1)
+                                msg = email_mod.message_from_bytes(header_bytes)
+                                analysis = _spam_analysis(msg, flags_str, whitelist=_wl_set, blacklist=_bl_set)
+                                if analysis["is_spam"]:
+                                    from_hdr = _decode_header(msg.get("From", "") or "")
+                                    subj_hdr = _decode_header(msg.get("Subject", "") or "")
+                                    spam_uids.append(uid)
+                                    spam_details.append({
+                                        "uid": uid,
+                                        "from": from_hdr[:80],
+                                        "subject": subj_hdr[:100],
+                                        "score": analysis["score"],
+                                        "reasons": analysis["reasons"],
+                                    })
+                            j += 1
+
+                    total_scanned += folder_total
+                    total_spam += len(spam_uids)
+                    results[fname] = {
+                        "total": folder_total,
+                        "spam_count": len(spam_uids),
+                        "spam_uids": spam_uids,
+                        "spam_details": spam_details,
+                    }
+                except Exception as e:
+                    logger.warning(f"Spam scan failed for folder {fname}: {e}")
+                    results[fname] = {"total": 0, "spam_count": 0, "spam_uids": [], "error": str(e)}
+        return {"folders": results, "total_scanned": total_scanned, "total_spam": total_spam}
+
+    if stream:
+        return StreamingResponse(
+            iterate_in_threadpool(_do_scan_stream()),
+            media_type="application/x-ndjson",
+        )
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        scan_result = await loop.run_in_executor(None, _do_scan)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+
+    return scan_result
+
+
+@router.get("/{account_id}/spam-whitelist")
+async def get_spam_whitelist(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get spam whitelist entries for an account."""
+    account = await _get_account(account_id, user, db)
+    result = await db.execute(
+        select(SpamWhitelist).where(SpamWhitelist.account_id == account_id).order_by(SpamWhitelist.value)
+    )
+    entries = result.scalars().all()
+    return [{"id": e.id, "entry_type": e.entry_type, "value": e.value} for e in entries]
+
+
+@router.post("/{account_id}/spam-whitelist")
+async def add_to_spam_whitelist(
+    account_id: int,
+    req: WhitelistAddRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add an email or domain to the spam whitelist."""
+    account = await _get_account(account_id, user, db)
+    val = req.value.strip().lower()
+    if req.entry_type not in ("email", "domain"):
+        raise HTTPException(status_code=400, detail="entry_type must be 'email' or 'domain'")
+    if not val:
+        raise HTTPException(status_code=400, detail="value cannot be empty")
+    # Check for duplicate
+    existing = await db.execute(
+        select(SpamWhitelist).where(
+            SpamWhitelist.account_id == account_id,
+            SpamWhitelist.entry_type == req.entry_type,
+            SpamWhitelist.value == val,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"status": "already_exists"}
+    entry = SpamWhitelist(account_id=account_id, entry_type=req.entry_type, value=val)
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return {"id": entry.id, "entry_type": entry.entry_type, "value": entry.value}
+
+
+@router.delete("/{account_id}/spam-whitelist/by-sender")
+async def remove_whitelist_by_sender(
+    account_id: int,
+    email_addr: str = Query(..., alias="email"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove all whitelist entries matching a sender email or its domain."""
+    account = await _get_account(account_id, user, db)
+    addr = email_addr.strip().lower()
+    domain = addr.split("@")[-1] if "@" in addr else ""
+    conditions = [SpamWhitelist.account_id == account_id]
+    from sqlalchemy import or_
+    match_conds = [SpamWhitelist.value == addr]
+    if domain:
+        match_conds.append(SpamWhitelist.value == domain)
+    result = await db.execute(
+        select(SpamWhitelist).where(*conditions, or_(*match_conds))
+    )
+    entries = result.scalars().all()
+    for e in entries:
+        await db.delete(e)
+    if entries:
+        await db.commit()
+    return {"status": "deleted", "count": len(entries)}
+
+
+@router.delete("/{account_id}/spam-whitelist/{entry_id}")
+async def remove_from_spam_whitelist(
+    account_id: int,
+    entry_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an entry from the spam whitelist."""
+    account = await _get_account(account_id, user, db)
+    result = await db.execute(
+        select(SpamWhitelist).where(SpamWhitelist.id == entry_id, SpamWhitelist.account_id == account_id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Whitelist entry not found")
+    await db.delete(entry)
+    await db.commit()
+    return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Spam blacklist CRUD
+# ---------------------------------------------------------------------------
+
+@router.get("/{account_id}/spam-blacklist")
+async def get_spam_blacklist(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    account = await _get_account(account_id, user, db)
+    result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.account_id == account_id).order_by(SpamBlacklist.value)
+    )
+    entries = result.scalars().all()
+    return [{"id": e.id, "entry_type": e.entry_type, "value": e.value} for e in entries]
+
+
+@router.post("/{account_id}/spam-blacklist")
+async def add_to_spam_blacklist(
+    account_id: int,
+    req: WhitelistAddRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    account = await _get_account(account_id, user, db)
+    val = req.value.strip().lower()
+    if req.entry_type not in ("email", "domain"):
+        raise HTTPException(status_code=400, detail="entry_type must be 'email' or 'domain'")
+    if not val:
+        raise HTTPException(status_code=400, detail="value cannot be empty")
+    existing = await db.execute(
+        select(SpamBlacklist).where(
+            SpamBlacklist.account_id == account_id,
+            SpamBlacklist.entry_type == req.entry_type,
+            SpamBlacklist.value == val,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"status": "already_exists"}
+    entry = SpamBlacklist(account_id=account_id, entry_type=req.entry_type, value=val)
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return {"id": entry.id, "entry_type": entry.entry_type, "value": entry.value}
+
+
+@router.delete("/{account_id}/spam-blacklist/by-sender")
+async def remove_blacklist_by_sender(
+    account_id: int,
+    email_addr: str = Query(..., alias="email"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    account = await _get_account(account_id, user, db)
+    addr = email_addr.strip().lower()
+    domain = addr.split("@")[-1] if "@" in addr else ""
+    from sqlalchemy import or_
+    match_conds = [SpamBlacklist.value == addr]
+    if domain:
+        match_conds.append(SpamBlacklist.value == domain)
+    result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.account_id == account_id, or_(*match_conds))
+    )
+    entries = result.scalars().all()
+    for e in entries:
+        await db.delete(e)
+    if entries:
+        await db.commit()
+    return {"status": "deleted", "count": len(entries)}
+
+
+@router.delete("/{account_id}/spam-blacklist/{entry_id}")
+async def remove_from_spam_blacklist(
+    account_id: int,
+    entry_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    account = await _get_account(account_id, user, db)
+    result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.id == entry_id, SpamBlacklist.account_id == account_id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Blacklist entry not found")
+    await db.delete(entry)
+    await db.commit()
+    return {"status": "deleted"}
+
+
 class CreateFolderRequest(BaseModel):
     folder_name: str
 
@@ -448,6 +868,7 @@ async def create_folder(
 
 class DeleteFolderRequest(BaseModel):
     folder_name: str
+    force: bool = False
 
 
 @router.post("/{account_id}/delete-folder")
@@ -472,9 +893,84 @@ async def delete_folder(
     )
     try:
         with IMAPManager(config) as imap:
+            from src.imap.manager import _imap_quote
+
+            def _empty_folder(conn, folder):
+                st, resp = conn.select(_imap_quote(folder))
+                if st != "OK":
+                    return
+                st2, data = conn.uid("SEARCH", None, "ALL")
+                if st2 == "OK" and data[0]:
+                    uids = data[0].decode().split()
+                    for i in range(0, len(uids), 50):
+                        batch = ",".join(uids[i:i + 50])
+                        conn.uid("STORE", batch, "+FLAGS", "(\\Deleted)")
+                    conn.expunge()
+                conn.close()
+
+            conn = imap._conn
+
+            def _count_folder(conn, folder):
+                st, resp = conn.select(_imap_quote(folder), readonly=True)
+                c = 0
+                if st == "OK" and resp and resp[0]:
+                    c = int(resp[0])
+                conn.close()
+                return c
+
+            # Count messages in main folder
+            msg_count = _count_folder(conn, req.folder_name)
+
+            # List subfolders
+            import re
+            st, folder_list = conn.list(_imap_quote(req.folder_name))
+            subfolders = []
+            if st == "OK" and folder_list:
+                for item in folder_list:
+                    if item is None:
+                        continue
+                    line = item.decode() if isinstance(item, bytes) else str(item)
+                    match = re.search(r'"([^"]*)" "?([^"]*)"?\s*$', line)
+                    if match:
+                        fname = match.group(2).strip().strip('"')
+                        if fname != req.folder_name:
+                            subfolders.append(fname)
+
+            # Count messages in all subfolders
+            sub_counts = {}
+            for sf in subfolders:
+                sub_counts[sf] = _count_folder(conn, sf)
+            total_emails = msg_count + sum(sub_counts.values())
+
+            has_content = total_emails > 0 or len(subfolders) > 0
+            if has_content and not req.force:
+                import json as _json
+                from src.imap.manager import _decode_imap_utf7
+                def _dec_name(n):
+                    try: return _decode_imap_utf7(n)
+                    except Exception: return n
+                info = {"total_emails": total_emails, "folder_emails": msg_count,
+                        "subfolders": len(subfolders), "name": _dec_name(req.folder_name), "details": {}}
+                if msg_count > 0:
+                    info["details"][_dec_name(req.folder_name)] = msg_count
+                for sf, sc in sub_counts.items():
+                    if sc > 0:
+                        info["details"][_dec_name(sf)] = sc
+                raise HTTPException(status_code=409, detail=_json.dumps(info, ensure_ascii=False))
+
+            if req.force:
+                # Delete subfolders deepest first
+                subfolders.sort(key=lambda x: x.count('/') + x.count('.'), reverse=True)
+                for sf in subfolders:
+                    _empty_folder(conn, sf)
+                    imap.delete_folder(sf)
+                # Empty the main folder
+                if msg_count > 0:
+                    _empty_folder(conn, req.folder_name)
+
             ok = imap.delete_folder(req.folder_name)
             if not ok:
-                raise HTTPException(status_code=400, detail="Failed to delete folder (may not be empty)")
+                raise HTTPException(status_code=400, detail="Failed to delete folder")
     except HTTPException:
         raise
     except Exception as e:
@@ -482,6 +978,48 @@ async def delete_folder(
     _folder_list_cache.pop(account_id, None)
     _folder_counts_cache.pop(account_id, None)
     return {"status": "deleted", "folder": req.folder_name}
+
+
+class EmptyFolderRequest(BaseModel):
+    folder_name: str
+
+
+@router.post("/{account_id}/empty-folder")
+async def empty_folder(
+    account_id: int,
+    req: EmptyFolderRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete all emails in a folder (for spam/drafts purge)."""
+    account = await _get_account(account_id, user, db)
+    from src.imap.manager import IMAPManager, IMAPConfig, _imap_quote
+    from src.security import decrypt_value as _dec
+    config = IMAPConfig(
+        host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+        user=account.imap_user, password=_dec(account.imap_password_encrypted),
+    )
+    try:
+        with IMAPManager(config) as imap:
+            conn = imap._conn
+            status, _ = conn.select(_imap_quote(req.folder_name))
+            if status != "OK":
+                raise HTTPException(status_code=400, detail=f"Cannot select folder: {req.folder_name}")
+            status, data = conn.uid("SEARCH", None, "ALL")
+            if status != "OK" or not data[0]:
+                return {"status": "empty", "deleted": 0}
+            uids = data[0].decode().split()
+            for i in range(0, len(uids), 50):
+                batch = ",".join(uids[i:i+50])
+                conn.uid("STORE", batch, "+FLAGS", "(\\Deleted)")
+            conn.expunge()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+    _folder_list_cache.pop(account_id, None)
+    _folder_counts_cache.pop(account_id, None)
+    return {"status": "emptied", "deleted": len(uids)}
 
 
 class RenameFolderRequest(BaseModel):
@@ -570,6 +1108,7 @@ async def list_messages(
     filter_date: str = Query("", description="Filter by date (substring)"),
     filter_replied: bool = Query(False, description="Filter only replied messages"),
     filter_attachments: bool = Query(False, description="Filter only messages with attachments"),
+    filter_spam: bool = Query(False, description="Filter only spam messages"),
     sort_by: str = Query("date", description="Sort column: date, from, subject"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
     user: User = Depends(get_current_user),
@@ -629,10 +1168,22 @@ async def list_messages(
                 "flagged": em.flagged,
                 "answered": em.answered,
                 "has_attachments": em.has_attachments,
+                "spam": False,
             })
         return {"folder": folder, "total": total, "page": page, "size": size, "messages": messages, "storage": "local"}
 
     account = await _get_account(account_id, user, db)
+
+    # Load spam whitelist and blacklist for this account
+    wl_result = await db.execute(
+        select(SpamWhitelist).where(SpamWhitelist.account_id == account_id)
+    )
+    _whitelist_entries = {e.value for e in wl_result.scalars().all()}
+    bl_result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.account_id == account_id)
+    )
+    _blacklist_entries = {e.value for e in bl_result.scalars().all()}
+
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     import email as email_mod
@@ -775,7 +1326,7 @@ async def list_messages(
                 if not uids_to_fetch:
                     return result
                 uid_range = ",".join(uids_to_fetch)
-                st, dt = conn.uid("FETCH", uid_range, "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
+                st, dt = conn.uid("FETCH", uid_range, "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE X-Spam-Status X-Spam-Flag X-Spam-Score Authentication-Results X-VR-SPAMSCORE)])")
                 if st == "OK" and dt:
                     j = 0
                     while j < len(dt):
@@ -807,11 +1358,13 @@ async def list_messages(
                             flagged = "\\Flagged" in flags_str
                             answered = "\\Answered" in flags_str
                             has_att = 'attachment' in meta_line.lower() or '"attachment"' in meta_line.lower()
+                            spam = _spam_analysis(msg, flags_str, whitelist=_whitelist_entries, blacklist=_blacklist_entries)["is_spam"]
                             result.append({
                                 "uid": uid, "from": from_addr, "to": to_addr,
                                 "subject": subject, "date": date_str,
                                 "seen": seen, "flagged": flagged,
                                 "answered": answered, "has_attachments": has_att,
+                                "spam": spam,
                             })
                         j += 1
                 uid_order = {u: idx for idx, u in enumerate(uids_to_fetch)}
@@ -843,7 +1396,54 @@ async def list_messages(
             def _post_filter(m):
                 return all(f(m) for f in _post_filters)
 
-            if _post_filters:
+            if filter_spam:
+                # Two-pass approach for spam: fast scan then full fetch
+                # Pass 1: lightweight FETCH to identify spam UIDs
+                _spam_headers = "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT X-Spam-Status X-Spam-Flag X-Spam-Score Authentication-Results X-VR-SPAMSCORE Precedence X-Mailer Message-ID)])"
+                spam_uids_set = set()
+                scan_batch = 500
+                all_uid_list = [e[0] for e in uid_dates]
+                for i in range(0, len(all_uid_list), scan_batch):
+                    chunk = all_uid_list[i:i + scan_batch]
+                    uid_range = ",".join(chunk)
+                    st_s, dt_s = conn.uid("FETCH", uid_range, _spam_headers)
+                    if st_s != "OK" or not dt_s:
+                        continue
+                    j = 0
+                    while j < len(dt_s):
+                        item = dt_s[j]
+                        if isinstance(item, tuple) and len(item) == 2:
+                            meta_l = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                            hdr = item[1]
+                            um = re.search(r'UID (\d+)', meta_l)
+                            if um:
+                                u = um.group(1)
+                                fm2 = re.search(r'FLAGS \(([^)]*)\)', meta_l)
+                                fs2 = fm2.group(1) if fm2 else ""
+                                msg_s = email_mod.message_from_bytes(hdr)
+                                if _spam_analysis(msg_s, fs2, whitelist=_whitelist_entries, blacklist=_blacklist_entries)["is_spam"]:
+                                    spam_uids_set.add(u)
+                        j += 1
+                # Filter uid_dates to only spam UIDs, preserving sort order
+                uid_dates = [e for e in uid_dates if e[0] in spam_uids_set]
+                total = len(uid_dates)
+                # Apply remaining post-filters on paginated results if any
+                if _post_filters:
+                    page_start = page * size
+                    page_entries = uid_dates[page_start:page_start + size]
+                    page_uids = [e[0] for e in page_entries]
+                    idate_map = {e[0]: e[1] for e in page_entries}
+                    all_msgs = _fetch_messages(page_uids, idate_map)
+                    messages = [m for m in all_msgs if _post_filter(m)]
+                    total = len(uid_dates)  # approximate
+                else:
+                    # Pass 2: full fetch only for the page
+                    page_start = page * size
+                    page_entries = uid_dates[page_start:page_start + size]
+                    page_uids = [e[0] for e in page_entries]
+                    idate_map = {e[0]: e[1] for e in page_entries}
+                    messages = _fetch_messages(page_uids, idate_map)
+            elif _post_filters:
                 # Scan batches to find messages passing all post-filters
                 batch_size = 100
                 messages = []
@@ -939,7 +1539,7 @@ async def search_multi_folders(
                     # Fetch latest N
                     fetch_uids = uids[-req.max_per_folder:]
                     uid_range = ",".join(fetch_uids)
-                    status, fdata = conn.uid("FETCH", uid_range, "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])")
+                    status, fdata = conn.uid("FETCH", uid_range, "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE X-Spam-Status X-Spam-Flag X-Spam-Score Authentication-Results X-VR-SPAMSCORE)])")
                     if status != "OK" or not fdata:
                         continue
                     i = 0
@@ -970,6 +1570,7 @@ async def search_multi_folders(
                             seen = "\\Seen" in flags_str
                             flagged = "\\Flagged" in flags_str
                             answered = "\\Answered" in flags_str
+                            spam = _detect_spam_from_headers(msg, flags_str)
                             results.append({
                                 "uid": uid,
                                 "folder": folder,
@@ -981,6 +1582,7 @@ async def search_multi_folders(
                                 "seen": seen,
                                 "flagged": flagged,
                                 "answered": answered,
+                                "spam": spam,
                             })
                         i += 1
                 except Exception as e:
@@ -1149,6 +1751,37 @@ async def get_message(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
 
+    # Load whitelist and blacklist for spam analysis
+    wl_result = await db.execute(
+        select(SpamWhitelist).where(SpamWhitelist.account_id == account_id)
+    )
+    _wl_entries = {e.value for e in wl_result.scalars().all()}
+    bl_result = await db.execute(
+        select(SpamBlacklist).where(SpamBlacklist.account_id == account_id)
+    )
+    _bl_entries = {e.value for e in bl_result.scalars().all()}
+
+    analysis = _spam_analysis(msg, flags_str, subject=subject, from_addr=from_addr, whitelist=_wl_entries, blacklist=_bl_entries)
+    spam = analysis["is_spam"]
+    spam_score = str(analysis["score"])
+    spam_status_full = ", ".join(analysis["reasons"]) if analysis["reasons"] else ""
+
+    # Extract technical headers for detail view
+    _tech_header_names = [
+        "Return-Path", "Received", "Authentication-Results",
+        "Received-SPF", "DKIM-Signature", "ARC-Authentication-Results",
+        "X-Spam-Status", "X-Spam-Flag", "X-Spam-Score",
+        "X-VR-SPAMSCORE", "X-Mailer", "User-Agent",
+        "Content-Type", "MIME-Version", "X-Originating-IP",
+        "X-MS-Exchange-Organization-SCL",
+    ]
+    tech_headers = []
+    for hname in _tech_header_names:
+        values = msg.get_all(hname)
+        if values:
+            for v in values:
+                tech_headers.append({"name": hname, "value": str(v).strip()})
+
     return {
         "uid": uid,
         "folder": folder,
@@ -1165,9 +1798,13 @@ async def get_message(
         "seen": seen,
         "flagged": flagged,
         "answered": answered,
+        "spam": spam,
+        "spam_score": spam_score,
+        "spam_details": spam_status_full,
         "body_text": body_text,
         "body_html": body_html,
         "attachments": attachments,
+        "tech_headers": tech_headers,
     }
 
 
@@ -1258,6 +1895,7 @@ async def save_draft(
         from_addr=from_addr, to=req.to, cc=req.cc, bcc=req.bcc,
         subject=req.subject, body_text=req.body_text, body_html=req.body_html,
         attachments=req.attachments, priority=req.priority,
+        in_reply_to=req.in_reply_to, references=req.references,
     )
 
     config = IMAPConfig(
@@ -2290,6 +2928,180 @@ async def _get_account(account_id: int, user: User, db: AsyncSession) -> MailAcc
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
+
+
+_DISPOSABLE_DOMAINS = {
+    "mailinator.com", "guerrillamail.com", "tempmail.com", "throwaway.email",
+    "yopmail.com", "sharklasers.com", "guerrillamailblock.com", "grr.la",
+    "dispostable.com", "maildrop.cc", "10minutemail.com", "trashmail.com",
+    "fakeinbox.com", "tempail.com", "mailnesia.com", "temp-mail.org",
+    "getnada.com", "emailondeck.com", "mohmal.com", "burnermail.io",
+}
+
+_SPAM_SUBJECT_PATTERNS = None
+
+def _get_spam_subject_patterns():
+    global _SPAM_SUBJECT_PATTERNS
+    if _SPAM_SUBJECT_PATTERNS is None:
+        import re
+        _SPAM_SUBJECT_PATTERNS = [
+            (re.compile(r'\b(viagra|cialis|pharmacy|pills?|medication|prescription)\b', re.I), "pharma_keywords", 3.0),
+            (re.compile(r'\b(lottery|winner|congratulations|prize|won|jackpot)\b', re.I), "lottery_scam", 3.0),
+            (re.compile(r'\b(nigerian?|prince|inheritance|beneficiary|next.of.kin)\b', re.I), "419_scam", 3.5),
+            (re.compile(r'\b(bitcoin|crypto|trading.signals?|guaranteed.returns?|invest.now)\b', re.I), "crypto_scam", 2.0),
+            (re.compile(r'\b(urgent|immediate|act.now|limited.time|expires?.today|last.chance|don\'?t.miss)\b', re.I), "urgency", 1.0),
+            (re.compile(r'\b(click.here|verify.your.account|confirm.your|update.your.payment|suspended)\b', re.I), "phishing", 2.5),
+            (re.compile(r'\b(unsubscribe|bulk|mass.mail|dear.customer|dear.user|dear.friend)\b', re.I), "bulk_patterns", 0.5),
+            (re.compile(r'[A-Z\s]{15,}', re.A), "excessive_caps", 1.5),
+            (re.compile(r'[!]{3,}'), "excessive_exclamation", 1.5),
+            (re.compile(r'[$€£¥]\s*\d[\d,.]+\s*(million|thousand|USD|EUR)', re.I), "money_mention", 2.0),
+            (re.compile(r'(https?://)?(bit\.ly|tinyurl|t\.co|goo\.gl|is\.gd|buff\.ly|ow\.ly|rebrand\.ly)/\S+', re.I), "shortened_url", 1.5),
+        ]
+    return _SPAM_SUBJECT_PATTERNS
+
+
+def _spam_analysis(msg, flags_str: str = "", subject: str = "", from_addr: str = "", whitelist: set = None, blacklist: set = None) -> dict:
+    """Full spam analysis returning score, reasons, and verdict."""
+    import re
+    score = 0.0
+    reasons = []
+
+    # Extract sender info for whitelist/blacklist checks
+    sender = from_addr or _decode_header(msg.get("From", "") or "")
+    sender_lower = sender.lower()
+    email_match = re.search(r'[\w.+-]+@[\w.-]+', sender_lower)
+    sender_email = email_match.group(0) if email_match else sender_lower
+    sender_domain = sender_email.split("@")[-1] if "@" in sender_email else ""
+
+    # Check whitelist — if sender matches, skip all analysis
+    if whitelist:
+        for entry in whitelist:
+            if entry == sender_email or entry == sender_domain:
+                return {"is_spam": False, "score": 0, "reasons": ["whitelisted"]}
+
+    # Check blacklist — if sender matches, force spam
+    if blacklist:
+        for entry in blacklist:
+            if entry == sender_email or entry == sender_domain:
+                return {"is_spam": True, "score": 10, "reasons": ["blacklisted"]}
+
+    # --- Server-side signals (high confidence) ---
+
+    # 1. IMAP $Junk keyword
+    if "$Junk" in flags_str or "Junk" in flags_str:
+        score += 5.0
+        reasons.append("imap_junk_flag")
+
+    # 2. X-Spam-Flag header
+    spam_flag = (msg.get("X-Spam-Flag", "") or "").strip().upper()
+    if spam_flag in ("YES", "TRUE"):
+        score += 5.0
+        reasons.append("x_spam_flag")
+
+    # 3. X-Spam-Status header (SpamAssassin)
+    spam_status = (msg.get("X-Spam-Status", "") or "").strip()
+    if spam_status.upper().startswith("YES"):
+        score += 5.0
+        reasons.append("spamassassin_yes")
+
+    # 4. X-Spam-Score
+    try:
+        sa_score = float((msg.get("X-Spam-Score", "0") or "0").strip())
+        if sa_score >= 5.0:
+            score += sa_score
+            reasons.append(f"spam_score_{sa_score}")
+        elif sa_score >= 3.0:
+            score += sa_score * 0.5
+            reasons.append(f"spam_score_warn_{sa_score}")
+    except (ValueError, TypeError):
+        pass
+
+    # 5. X-VR-SPAMSCORE (OVH server-side spam score, 0-100)
+    try:
+        vr_score = int((msg.get("X-VR-SPAMSCORE", "0") or "0").strip())
+        if vr_score >= 50:
+            score += 5.0
+            reasons.append(f"ovh_spam_{vr_score}")
+        elif vr_score >= 30:
+            score += 3.0
+            reasons.append(f"ovh_suspicious_{vr_score}")
+        elif vr_score >= 17:
+            score += 1.5
+            reasons.append(f"ovh_warn_{vr_score}")
+    except (ValueError, TypeError):
+        pass
+
+    # --- Authentication checks ---
+
+    auth_results = (msg.get("Authentication-Results", "") or "").strip()
+    if auth_results:
+        auth_lower = auth_results.lower()
+        if "spf=fail" in auth_lower or "spf=softfail" in auth_lower:
+            score += 2.0
+            reasons.append("spf_fail")
+        if "dkim=fail" in auth_lower:
+            score += 2.0
+            reasons.append("dkim_fail")
+        if "dmarc=fail" in auth_lower:
+            score += 2.5
+            reasons.append("dmarc_fail")
+        # Multiple auth failures compound
+        auth_fails = sum(1 for r in reasons if r in ("spf_fail", "dkim_fail", "dmarc_fail"))
+        if auth_fails >= 2:
+            score += 1.5
+            reasons.append("multi_auth_fail")
+
+    # --- Subject heuristics ---
+
+    subj = subject or _decode_header(msg.get("Subject", "") or "")
+    if subj:
+        for pattern, name, pts in _get_spam_subject_patterns():
+            if pattern.search(subj):
+                score += pts
+                reasons.append(name)
+
+    # --- Sender analysis ---
+
+    sender = from_addr or _decode_header(msg.get("From", "") or "")
+    if sender:
+        # Extract domain
+        domain_match = re.search(r'@([\w.-]+)', sender)
+        if domain_match:
+            domain = domain_match.group(1).lower()
+            if domain in _DISPOSABLE_DOMAINS:
+                score += 4.0
+                reasons.append("disposable_domain")
+        else:
+            # No @ in from — suspicious
+            score += 1.5
+            reasons.append("no_sender_domain")
+
+    # --- Header anomalies ---
+
+    # Missing Message-ID (common in bulk spam)
+    if not (msg.get("Message-ID", "") or "").strip():
+        score += 1.0
+        reasons.append("missing_message_id")
+
+    # X-Mailer / User-Agent checks for known spam tools
+    x_mailer = (msg.get("X-Mailer", "") or "").strip().lower()
+    if x_mailer and any(k in x_mailer for k in ("mass", "bulk", "blast", "bomber")):
+        score += 3.0
+        reasons.append("spam_mailer")
+
+    # Precedence: bulk
+    precedence = (msg.get("Precedence", "") or "").strip().lower()
+    if precedence == "bulk":
+        score += 0.5
+        reasons.append("precedence_bulk")
+
+    is_spam = score >= 5.0
+    return {"is_spam": is_spam, "score": round(score, 1), "reasons": reasons}
+
+
+def _detect_spam_from_headers(msg, flags_str: str = "", whitelist: set = None, blacklist: set = None) -> bool:
+    """Quick spam check — boolean wrapper around full analysis."""
+    return _spam_analysis(msg, flags_str, whitelist=whitelist, blacklist=blacklist)["is_spam"]
 
 
 def _decode_header(raw: str) -> str:

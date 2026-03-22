@@ -390,12 +390,19 @@ class IMAPManager:
         ]
         try:
             folders = self.list_folders()
-            folder_names = [f["name"] for f in folders]
+            # First: find folder with \Drafts flag (most reliable)
             draft_folder = None
-            for d in draft_names:
-                if d in folder_names:
-                    draft_folder = d
+            for f in folders:
+                if "\\Drafts" in f.get("flags", ""):
+                    draft_folder = f["name"]
                     break
+            # Fallback: try common names
+            if not draft_folder:
+                folder_names = [f["name"] for f in folders]
+                for d in draft_names:
+                    if d in folder_names:
+                        draft_folder = d
+                        break
             if not draft_folder:
                 draft_folder = "Drafts"
                 self._conn.create(_imap_quote(draft_folder))
@@ -405,7 +412,7 @@ class IMAPManager:
         import time
         status, _ = self._conn.append(
             _imap_quote(draft_folder),
-            "\\Draft",
+            "(\\Draft)",
             imaplib.Time2Internaldate(time.time()),
             raw_message,
         )
@@ -442,7 +449,7 @@ class IMAPManager:
         import time
         status, _ = self._conn.append(
             _imap_quote(sent_folder),
-            "\\Seen",
+            "(\\Seen)",
             imaplib.Time2Internaldate(time.time()),
             raw_message,
         )
