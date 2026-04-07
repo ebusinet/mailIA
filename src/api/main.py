@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts, signatures
+from src.api.routes import auth, accounts, search, rules, ai, admin, websocket, contacts, signatures, digest
+from src.api.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from src.config import get_settings
 
 settings = get_settings()
@@ -25,9 +26,9 @@ class SSEAwareGZipMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Check if this is a streaming AI endpoint — skip GZip entirely
+        # Check if this is a streaming endpoint — skip GZip entirely
         path = scope.get("path", "")
-        if path.startswith("/api/ai/"):
+        if path.startswith("/api/ai/") or "/apply" in path or "/spam-scan" in path:
             await self.app(scope, receive, send)
             return
 
@@ -36,6 +37,9 @@ class SSEAwareGZipMiddleware:
 
 
 app.add_middleware(SSEAwareGZipMiddleware, minimum_size=1000)
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, redis_url=settings.redis_url)
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +57,7 @@ app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"])
 app.include_router(signatures.router, prefix="/api/signatures", tags=["signatures"])
+app.include_router(digest.router, prefix="/api/digest", tags=["digest"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")

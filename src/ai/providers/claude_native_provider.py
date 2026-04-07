@@ -16,7 +16,11 @@ class ClaudeNativeProvider(LLMProvider):
                  mcp_servers: dict | None = None):
         self.api_key = api_key
         self.default_model = default_model
-        self.base_url = base_url.rstrip("/")
+        # Strip /claude/query suffix if user included it in the endpoint
+        url = base_url.rstrip("/")
+        if url.endswith("/claude/query"):
+            url = url[: -len("/claude/query")]
+        self.base_url = url
         self.mcp_servers = mcp_servers
 
     def _build_request(self, messages: list[AIMessage], model: str | None = None,
