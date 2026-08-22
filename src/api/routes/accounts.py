@@ -17,8 +17,8 @@ from src.db.models import User, MailAccount, LocalFolder, LocalEmail, SpamWhitel
 from src.api.deps import get_current_user
 from src.security import encrypt_value
 from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag,
-                              InvalidFolderName, InvalidUid, _imap_astring, _imap_quote,
-                              _uid_search)
+                              InvalidFolderName, InvalidUid, NoTrashFolder, _imap_astring,
+                              _imap_quote, _uid_search)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -127,6 +127,9 @@ def _imap_http_error(e: Exception, action: str = "operation IMAP") -> HTTPExcept
             status_code=404,
             detail="Dossier introuvable ou impossible a ouvrir sur le serveur de messagerie.",
         )
+    if isinstance(e, NoTrashFolder):
+        # 409 : la demande est legitime mais ne peut aboutir sans confirmation explicite.
+        return HTTPException(status_code=409, detail=str(e))
     if isinstance(e, (ImapInjection, InvalidFlag, InvalidFolderName, InvalidUid)):
         return HTTPException(status_code=422, detail=str(e))
     return HTTPException(
@@ -281,6 +284,8 @@ class MoveRequest(BaseModel):
 class BulkDeleteRequest(BaseModel):
     uids: list[str]
     folder: str
+    # Sans corbeille, la suppression detruit : elle doit etre demandee, pas subie.
+    permanent: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -2252,7 +2257,9 @@ async def move_message(
             )
             db.add(local_email)
             await db.commit()
-            imap.delete_email(uid, folder)
+            # Deja stocke en base : la purge cote IMAP est le comportement voulu ici,
+            # sinon un serveur sans corbeille ferait echouer le deplacement apres coup.
+            imap.delete_email(uid, folder, permanent=True)
         return {"status": "moved", "target_folder": req.target_folder}
 
     elif storage == "local" and target_storage == "imap":
@@ -2312,10 +2319,14 @@ async def delete_message(
     uid: str,
     folder: str = Query(...),
     storage: str = Query("imap"),
+    permanent: bool = Query(False, description="Purge instead of moving to Trash — irreversible"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete an email (move to Trash or delete from local DB)."""
+    """Delete an email: move it to Trash, or purge it if `permanent` says so.
+
+    Without a Trash folder and without `permanent`, the call is refused (409) rather than
+    destroying the message while answering "deleted"."""
     account = await _get_account(account_id, user, db)
     uid = _require_message_uid(uid, storage)
     folder = _require_query_folder(folder)
@@ -2334,7 +2345,8 @@ async def delete_message(
     )
     try:
         with IMAPManager(config) as imap:
-            ok = imap.delete_email(uid, folder)
+            ok = imap.delete_email(uid, folder, permanent=permanent)
+            recoverable = getattr(imap, "last_delete_recoverable", not permanent)
         if not ok:
             raise HTTPException(status_code=502, detail="Delete failed")
     except HTTPException:
@@ -2345,7 +2357,8 @@ async def delete_message(
     except Exception as e:
         raise _imap_http_error(e)
 
-    return {"status": "deleted"}
+    # L'appelant doit pouvoir distinguer « en corbeille » de « detruit ».
+    return {"status": "deleted", "recoverable": recoverable}
 
 
 @router.post("/{account_id}/delete-bulk")
@@ -2386,7 +2399,9 @@ async def delete_bulk(
     )
     try:
         with IMAPManager(config) as imap:
-            result = imap.delete_emails_bulk(req.uids, req.folder)
+            result = imap.delete_emails_bulk(req.uids, req.folder, permanent=req.permanent)
+    except HTTPException:
+        raise
     except Exception as e:
         raise _imap_http_error(e)
 

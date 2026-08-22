@@ -26,6 +26,7 @@ from pydantic import Field
 
 from src.config import get_settings
 from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName,
+                              NoTrashFolder,
                               InvalidUid, _check_target, _check_uid, _check_uid_list,
                               _decode_imap_utf7, _encode_imap_utf7, _imap_astring,
                               _imap_criteria, _imap_quote, _uid_search)
@@ -215,6 +216,7 @@ class ToolActivityMiddleware(Middleware):
             status = "error"
             raise
         except (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName, InvalidUid,
+                NoTrashFolder,
                 imaplib.IMAP4.error) as e:
             # Single choke point: every tool reports IMAP trouble the same way,
             # instead of leaking imaplib's internals to the client.
@@ -897,8 +899,10 @@ async def delete_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
 ) -> dict:
-    """Delete a single email (moves to Trash or flags as Deleted).
+    """Delete a single email: moves it to Trash. Fails if the server has no Trash folder,
+    unless permanent=true is passed to confirm the message will be destroyed for good.
     WARNING: For deleting multiple emails, ALWAYS use search_and_delete_emails (by criteria)
     or delete_emails_bulk (by UIDs) instead — they are 50-100x faster."""
     from src.mcp.context import get_db, get_imap
@@ -912,14 +916,16 @@ async def delete_email(
     imap = get_imap(account)
     imap.connect()
     try:
-        ok = imap.delete_email(uid, folder)
+        ok = imap.delete_email(uid, folder, permanent=permanent)
+        recoverable = getattr(imap, "last_delete_recoverable", not permanent)
     finally:
         imap.disconnect()
 
     if ok:
         await _es_delete_docs(user_id, account_id, folder, [uid])
 
-    return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder}
+    return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder,
+            "recoverable": recoverable if ok else None}
 
 
 @mcp.tool(tags={"action"})
@@ -927,6 +933,7 @@ async def delete_emails_bulk(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uids: Annotated[list[str], Field(description="List of email UIDs to delete")],
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
 ) -> dict:
     """Delete multiple emails by UIDs in one batch (50-100x faster than one-by-one).
     All UIDs must be from the same folder. Moves to Trash or flags as Deleted.
@@ -944,7 +951,7 @@ async def delete_emails_bulk(
     imap = get_imap(account)
     imap.connect()
     try:
-        result = imap.delete_emails_bulk(uids, folder)
+        result = imap.delete_emails_bulk(uids, folder, permanent=permanent)
     finally:
         imap.disconnect()
 
@@ -965,6 +972,7 @@ async def search_and_delete_emails(
         "'FROM \"@darty.com\"' — by domain, "
         "'OR (OR FROM \"a@x.com\" FROM \"b@x.com\") FROM \"c@y.com\"' — 3+ senders"
     ))],
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
     max_delete: Annotated[int, Field(
         description="Maximum emails to delete per call (hard safety limit, 1..1000)",
         ge=1, le=1000)] = 1000,
@@ -994,7 +1002,7 @@ async def search_and_delete_emails(
         total_found = len(uids)
         # Apply safety limit
         uids = uids[:_check_cap(max_delete, "max_delete")]
-        result = imap.delete_emails_bulk(uids, folder)
+        result = imap.delete_emails_bulk(uids, folder, permanent=permanent)
         result["found"] = total_found
         result["limited_to"] = max_delete if total_found > max_delete else None
     finally:

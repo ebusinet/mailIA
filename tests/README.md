@@ -343,23 +343,62 @@ SKIP, et le rapport le dit explicitement.
 
 ---
 
-## 12. Trois signaux qui ne veulent pas dire ce qu'on croit
+## 12. Cinq pieges qui rendent un test vert sans qu'il prouve quoi que ce soit
 
-Chacun a produit un faux résultat pendant la campagne. Ils sont retenus ici parce que le piège
-est réutilisable, pas parce que les cas particuliers sont intéressants.
+Chacun a produit un faux resultat pendant la campagne. Ils sont ici parce que le piege est
+reutilisable, pas parce que les cas particuliers sont interessants. Les quatre premiers ont la
+meme forme : **deux causes differentes derriere un meme signal observable.** Le cinquieme est
+d'une autre nature, et c'est le plus insidieux.
 
-**Un `502` n'est pas toujours l'application.** L'API émet des 502 légitimes (`{"detail": "IMAP
-error: …"}`), nginx en émet pendant un redéploiement (page HTML). Le discriminant est le **corps**,
-jamais le code. La suite rend désormais un `Skip` sur un 502 sans corps JSON — sans quoi un
-redémarrage de conteneur se lit comme quatorze régressions produit.
+### 1. Un `502` n'est pas toujours l'application
 
-**Un `403` n'a pas toujours la même cause.** « Réservé aux administrateurs » et « chemin hors du
-répertoire autorisé » portent le même code. Les confondre transformait la preuve qu'un correctif
-fonctionne en « non vérifié ».
+L'API emet des 502 legitimes (`{"detail": "IMAP error: …"}`), nginx en emet pendant un
+redeploiement (page HTML). Le discriminant est le **corps**, jamais le code. Sans ca, un
+redemarrage de conteneur se lit comme quatorze regressions produit — c'est arrive.
 
-**Une absence d'effet n'est pas un refus.** C'est le plus coûteux des trois. Un `found: 0` sur un
-dossier déjà vidé, un témoin absent parce que la charge était mal formée, un dossier disparu parce
-que le test l'avait lui-même renommé : dans les trois cas le résultat attendu et le résultat
-redouté se ressemblaient. **Il revient au test de les rendre distinguables** — critère qui ne
-correspond à rien, témoin que seul le défaut peut produire, périmètre manipulé exclu du
-recensement.
+### 2. Un `403` n'a pas toujours la meme cause
+
+« Reserve aux administrateurs » et « chemin hors du repertoire autorise » portent le meme code.
+Les confondre transformait la **preuve qu'un correctif fonctionne** en « non verifie ».
+
+### 3. Un conteneur absent n'est pas un defaut produit
+
+`docker exec` sur un conteneur en cours de recreation rend une erreur qui ressemble a un echec
+d'execution. Le message (`is not running`, `No such container`) distingue.
+
+### 4. Une reponse vide n'est pas un refus, une absence d'effet non plus
+
+Le plus couteux. Un `found: 0` sur un dossier deja vide, un temoin absent parce que la charge
+etait mal formee, un dossier disparu parce que le test l'avait lui-meme renomme, une reponse
+vide parce que l'outil de test avait disparu du conteneur reconstruit.
+
+**Il revient au test de rendre le resultat attendu et le resultat redoute distinguables** :
+critere qui ne correspond a rien, temoin que seul le defaut peut produire, perimetre manipule
+exclu du recensement.
+
+### 5. Verifier qu'une protection existe n'est pas verifier qu'elle est employee
+
+Celui-la ne rentre pas dans le moule des quatre autres : **l'assertion est juste, c'est son
+objet qui est a cote.**
+
+`ROB-21` interrogeait `_imap_astring` avec la charge exacte. Le garde existait, il refusait
+correctement, le test etait vert — et le site d'appel ne l'utilisait pas : le conteneur deploye
+contenait encore `f'HEADER Message-ID "<{clean}>"'` en clair. Deux assertions justes, deux
+verts, une faille bien vivante.
+
+La reponse est un test **structurel** : verifier la forme du code deploye plutot que son
+comportement. Independant du serveur et du chemin d'execution. C'est ce que font deja `SMTP-06`
+et `SMTP-07` pour `starttls()`.
+
+### Le corollaire operationnel
+
+**Un test de securite doit avoir ete vu rouge au moins une fois.** Tant qu'on ne l'a pas vu
+echouer sur le defaut qu'il pretend garder, on ne sait pas s'il discrimine. Sur cette campagne,
+un seul test a ete observe passant du rouge au vert sur le correctif attendu — et c'est le seul
+dont on sache qu'il fonctionne.
+
+Piege annexe, de la meme famille : la detection de `ROB-21` etait d'abord une expression
+reguliere, corrompue par l'echappement imbriquee (heredoc -> chaine Python -> code distant).
+**Un motif corrompu ne matche rien, donc le test est vert.** Un test dont l'outil de detection
+est casse est indiscernable d'un test qui passe. Remplacee par une sous-chaine construite
+caractere par caractere.

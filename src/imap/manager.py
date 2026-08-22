@@ -61,6 +61,15 @@ class ImapInjection(ValueError):
     """A value that would break out of the IMAP command it is embedded in."""
 
 
+class NoTrashFolder(Exception):
+    """No Trash folder, so deleting would purge instead of moving.
+
+    Refused rather than performed: destruction must be asked for, not suffered.
+    Creating a Trash folder unprompted was the alternative — rejected, see the
+    report: on a server whose bin has an unexpected name it would split the user's
+    deleted mail across two folders, silently."""
+
+
 class InvalidFlag(ValueError):
     """A flag name outside the finite set of IMAP system flags.
 
@@ -506,7 +515,13 @@ class IMAPManager:
         return data[0].decode().split() if data[0] else []
 
     def _find_trash_folder(self) -> str | None:
-        """Find the Trash folder name, cached per connection."""
+        """Find the Trash folder name, cached per connection.
+
+        The \\Trash special-use flag comes first: it is the only reliable answer. The
+        name list misses anything the list does not anticipate — the real account here
+        uses "Elements supprimes", absent from it — and a miss used to mean permanent
+        destruction rather than a move.
+        """
         if hasattr(self, '_trash_cache'):
             return self._trash_cache
         trash_names = [
@@ -514,8 +529,13 @@ class IMAPManager:
             "Deleted Items", "INBOX.Deleted Items",
             "Corbeille", "INBOX.Corbeille",
         ]
+        self._trash_cache = None
         try:
             folders = self.list_folders()
+            for f in folders:
+                if "\\Trash" in f.get("flags", ""):
+                    self._trash_cache = f["name"]
+                    return self._trash_cache
             folder_names = [f["name"] for f in folders]
             for t in trash_names:
                 if t in folder_names:
@@ -523,33 +543,56 @@ class IMAPManager:
                     return t
         except Exception:
             pass
-        self._trash_cache = None
         return None
 
-    def delete_email(self, uid: str, folder: str) -> bool:
-        """Delete an email (move to Trash, or flag as Deleted)."""
+    def delete_email(self, uid: str, folder: str, permanent: bool = False) -> bool:
+        """Delete an email: move it to Trash, or purge it if that is what was asked.
+
+        Sets `last_delete_recoverable` so the caller can tell the user which happened.
+        Without a Trash folder this used to purge silently while answering "deleted":
+        a destruction the caller never asked for and could not detect.
+        """
         _check_uid(uid)
         trash_folder = self._find_trash_folder()
-        if trash_folder and folder != trash_folder:
+
+        if trash_folder and folder != trash_folder and not permanent:
+            self.last_delete_recoverable = True
             return self.move_email(uid, folder, trash_folder)
-        # Fallback: flag as Deleted
+
+        # Purge. Legitimate when emptying the Trash itself, or when explicitly asked.
+        if not permanent and folder != trash_folder:
+            raise NoTrashFolder(
+                "No Trash folder on this server: deleting would destroy the message "
+                "permanently. Pass permanent=true to confirm, or create a Trash folder."
+            )
         self._select(folder)
         status, _ = self._conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
         if status == "OK":
             self._conn.expunge()
+            self.last_delete_recoverable = False
             return True
         return False
 
-    def delete_emails_bulk(self, uids: list[str], folder: str) -> dict:
-        """Delete multiple emails in one batch. Uses UID sets for efficiency."""
+    def delete_emails_bulk(self, uids: list[str], folder: str, permanent: bool = False) -> dict:
+        """Delete multiple emails in one batch. Uses UID sets for efficiency.
+
+        The returned dict carries `recoverable` so the caller can say whether the mail
+        went to the Trash or was purged."""
         if not uids:
-            return {"deleted": 0, "failed": 0}
+            return {"deleted": 0, "failed": 0, "recoverable": True}
 
         uids = _check_uid_list(uids)
 
         trash_folder = self._find_trash_folder()
 
-        if trash_folder and folder != trash_folder:
+        if not permanent and not trash_folder and folder != trash_folder:
+            raise NoTrashFolder(
+                f"No Trash folder on this server: deleting these {len(uids)} messages "
+                "would destroy them permanently. Pass permanent=true to confirm, or "
+                "create a Trash folder."
+            )
+
+        if trash_folder and folder != trash_folder and not permanent:
             # Batch move to trash: SELECT once, COPY each, flag all, EXPUNGE once
             self._select(folder)
             self._conn.create(_imap_quote(trash_folder))
@@ -573,10 +616,10 @@ class IMAPManager:
                 if status != "OK":
                     for data in copy_responses:
                         self._rollback_copy(data, trash_folder)
-                    return {"deleted": 0, "failed": len(uids)}
+                    return {"deleted": 0, "failed": len(uids), "recoverable": True}
                 self._conn.expunge()
             logger.info(f"Bulk delete: {len(moved)} moved to trash, {failed} failed")
-            return {"deleted": len(moved), "failed": failed}
+            return {"deleted": len(moved), "failed": failed, "recoverable": True}
         else:
             # Already in trash or no trash: batch flag + single EXPUNGE
             self._select(folder)
@@ -585,9 +628,9 @@ class IMAPManager:
             if status == "OK":
                 self._conn.expunge()
                 logger.info(f"Bulk delete: {len(uids)} permanently deleted from {folder}")
-                return {"deleted": len(uids), "failed": 0}
+                return {"deleted": len(uids), "failed": 0, "recoverable": False}
             logger.error(f"Bulk delete STORE failed for {folder}")
-            return {"deleted": 0, "failed": len(uids)}
+            return {"deleted": 0, "failed": len(uids), "recoverable": False}
 
     def save_draft(self, raw_message: bytes) -> bool:
         """Save a message to the Drafts folder."""

@@ -8,10 +8,19 @@
 
 ## 1. Ce qu'il faut retenir
 
-Environ **60 défauts** ont été trouvés et corrigés, dont **trois failles de sécurité** et
-**trois bugs de perte ou de corruption de données**. Le plus grave n'était pas dans le code
-applicatif : 26 940 tâches de synchronisation étaient armées dans Redis, prêtes à s'exécuter sur le
-compte professionnel au premier démarrage du worker.
+Deux campagnes en deux jours. La première a corrigé **une soixantaine de défauts** et refermé
+deux failles de sécurité ; la seconde, qui cherchait ce que personne n'avait encore regardé, en a
+trouvé **huit de plus dont cinq injections de commande IMAP**.
+
+Trois choses dominent le reste :
+
+- **Une injection déclenchée par un email reçu.** La seule faille de la campagne qu'un tiers
+  extérieur puisse atteindre : ni compte, ni accès, ni manipulation — il suffit d'écrire à la
+  victime. Elle n'a été trouvée qu'au second jour, en relisant du travail déjà déclaré terminé.
+- **Trois façons de détruire du courrier** sans que rien ne le signale : la duplication à chaque
+  déplacement, le dossier cible vide, et la plage d'identifiants qui vide un dossier en un appel.
+- **26 940 tâches de synchronisation armées dans Redis**, qui auraient toutes visé le compte
+  professionnel au premier démarrage du worker. Ce n'était pas un défaut du code applicatif.
 
 Le projet **n'avait aucun test automatisé**. C'est la cause profonde : aucun des défauts majeurs
 n'aurait survécu à une suite de tests, même minimale. Une suite de non-régression a donc été
@@ -239,6 +248,30 @@ Une quatrième s'y est ajoutée en fin de journée : **vérifier qu'une protecti
 vérifier qu'elle est employée** — un test interrogeait la fonction de protection, qui refusait
 correctement, pendant que le site d'appel ne l'utilisait pas.
 
+## Ce que la suite de tests ne protège pas
+
+Elle compte 100 tests, un par défaut trouvé. Ce qu'elle ne fait pas mérite d'être écrit, parce
+qu'une suite dont on croit qu'elle prouve tout est plus dangereuse qu'une suite dont on connaît
+les limites.
+
+- **Un seul de ses tests a été observé passant du rouge au vert** sur le correctif attendu. C'est
+  la seule preuve qu'un test discrimine. Les autres sont crus, pas prouvés. D'où la règle inscrite
+  dans `tests/README.md` : *un test de sécurité doit avoir été vu rouge au moins une fois.*
+- **Elle ne détecte pas une exécution concurrente.** Un redéploiement, elle le voit — réponse sans
+  corps JSON, conteneur absent, horodatage du build. Mais une seconde suite travaillant sur le même
+  compte reste invisible : chaque test opère dans ses propres dossiers, tout passerait, et la
+  mesure serait fausse en paraissant bonne. C'est arrivé une fois pendant la campagne. La parade
+  est organisationnelle — un seul intervenant mesure à la fois — et non technique.
+- **La classe des injections n'est pas close.** Cinq ont été trouvées et fermées ; la dernière est
+  sortie d'un endroit qui ne figurait dans aucune des trois listes établies. Dire « la famille est
+  fermée » serait la même erreur que celles que la campagne a passé deux jours à corriger.
+- **Une divergence reste non mesurée là où elle compte** : la création d'un dossier passe par deux
+  chemins qui traitent le séparateur différemment. Sur le serveur de test strict le cas est
+  impossible, sur le permissif il est observable — mais le seul serveur qui réunit exactement les
+  conditions du compte professionnel est celui qu'on s'interdit de toucher. Un dossier créé depuis
+  l'interface et un dossier créé par l'assistant sous le même nom pourraient y être deux dossiers
+  distincts. Ni prouvé, ni écarté.
+
 ## Un refus qui vaut d'être noté
 
 Pour rendre testable le chemin TLS, un mécanisme installait un certificat de test dans le conteneur
@@ -252,6 +285,16 @@ passer pour n'importe quel serveur. Le test reste marqué « non exécutable »,
 100 tests au total, dont 22 issus du Plan A. Chaque défaut trouvé a son test.
 
 ## 7. Décisions qui vous appartiennent
+
+### 7.0 L'angle mort qui grandit : le worker n'a jamais tourné
+
+À mettre avant tout le reste. Depuis deux jours, des correctifs de synchronisation s'accumulent —
+persistance de la progression, disjoncteur du fournisseur d'IA, verrou par compte, validation des
+identifiants — et **aucun n'a jamais été exécuté une seule fois**. Ils sont écrits, déployés dans
+l'image, couverts par un test qui s'annonce lui-même comme non exécutable.
+
+Un test ignoré ne protège rien, et cet angle mort s'élargit à chaque lot. C'est aujourd'hui le
+principal écart entre ce qui est corrigé et ce qui est vérifié.
 
 ### 7.1 Redémarrer le worker et le planificateur
 
