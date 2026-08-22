@@ -276,3 +276,185 @@ def pas_d_oracle_sur_les_comptes():
     expect(len(distincts) == 1,
            "les reponses permettent de distinguer un compte existant d'un compte "
            f"inexistant : {reponses}")
+
+
+@test("SEC-G07", "Le nom d'un fichier televerse ne choisit pas ou il est ecrit", "G-07")
+def pas_d_ecriture_arbitraire():
+    """Defaut G-07, le plus grave du plan : `import-mbox` (`accounts.py:2544-2547`) construit
+    sa destination avec le nom fourni par le client, sans assainissement.
+
+        filename  = file.filename or "upload.mbox"
+        file_path = str(job_dir / filename)
+
+    Deux formes, deux mecanismes :
+      - `../../../../tmp/x` sort du repertoire par remontee ;
+      - `/tmp/x` fait mieux : `Path("/a/b") / "/tmp/x"` vaut `/tmp/x`. L'operateur abandonne
+        **entierement** la partie gauche. Un correctif qui n'interdirait que les `..` ne
+        fermerait donc rien — c'est le piege principal de ce defaut.
+
+    Portee mesuree a la decouverte : le conteneur tourne en `root`, et `/app/src` comme les
+    site-packages sont accessibles en ecriture. Ecraser un fichier Python donne l'execution
+    de code au redemarrage suivant, dans le conteneur qui detient la cle de chiffrement des
+    mots de passe IMAP.
+
+    Le test ecrit dans `/tmp` du conteneur, sur des noms qui lui sont propres, et supprime
+    ce qu'il a cree. **Il n'ecrase jamais un fichier existant** : creer un fichier la ou on
+    ne devrait pas suffit a etablir le defaut.
+    """
+    BOX.require()
+    import uuid
+    marque = "QA-SECG07-" + uuid.uuid4().hex[:8]
+    cibles = {
+        "nom absolu": f"/tmp/qa_secg07_abs_{marque}.txt",
+        "remontee relative": f"../../../../tmp/qa_secg07_rel_{marque}.txt",
+    }
+    attendus = [f"/tmp/qa_secg07_abs_{marque}.txt", f"/tmp/qa_secg07_rel_{marque}.txt"]
+
+    try:
+        for _, nom in cibles.items():
+            API.upload(f"/accounts/{CFG.account_id}/import-mbox", nom, marque.encode(),
+                       params={"storage": "local", "folder": "QA_SECG07"})
+
+        sortie = BOX.python(
+            "import json, os\n"
+            f"chemins = {attendus!r}\n"
+            "print('__QA__' + json.dumps([c for c in chemins if os.path.exists(c)]))\n")
+        sortis = None
+        for ligne in sortie.splitlines():
+            if ligne.startswith("__QA__"):
+                sortis = json.loads(ligne[6:])
+        if sortis is None:
+            raise Skip(f"verification impossible dans le conteneur : {sortie[-200:]}")
+    finally:
+        BOX.python(
+            "import os\n"
+            f"for c in {attendus!r}:\n"
+            "    try:\n"
+            "        os.remove(c)\n"
+            "    except OSError:\n"
+            "        pass\n")
+
+    # La portee du defaut ne se lit pas dans l'ecriture elle-meme : elle depend de QUI peut
+    # la declencher. On la mesure sur le code deploye — technique de `SEC-G09` — plutot que
+    # de stocker les identifiants d'un second utilisateur dans la suite, ce qui affaiblirait
+    # le garde-fou.
+    #
+    # Ce constat n'est PAS une assertion : un garde administrateur ajoute demain serait une
+    # bonne nouvelle, et un test qui vire au rouge sur une bonne nouvelle finit ignore. Il
+    # enrichit le message d'echec, la ou la portee compte pour qui doit prioriser.
+    portee = "portee non determinee"
+    try:
+        sortie_p = BOX.python(
+            "import inspect, json, re\n"
+            "import src.api.routes.accounts as A\n"
+            "src = inspect.getsource(A)\n"
+            "m = re.search(r'async def import_mbox\\(.*?\\n\\)', src, re.S)\n"
+            "sig = m.group(0) if m else ''\n"
+            "print('__QA__' + json.dumps({'admin': 'get_current_admin' in sig,\n"
+            "                             'trouve': bool(m)}))\n")
+        for ligne in sortie_p.splitlines():
+            if ligne.startswith("__QA__"):
+                d = json.loads(ligne[6:])
+                if not d["trouve"]:
+                    portee = "signature d'`import_mbox` introuvable dans le code deploye"
+                elif d["admin"]:
+                    portee = "l'endpoint est reserve aux administrateurs"
+                else:
+                    portee = ("l'endpoint n'a AUCUN garde administrateur : tout utilisateur "
+                              "authentifie possedant un compte mail peut declencher "
+                              "l'ecriture")
+    except Exception as e:
+        portee = f"portee non determinee ({type(e).__name__})"
+
+    expect(not sortis,
+           "un nom de fichier televerse a choisi sa destination hors du repertoire "
+           f"d'import : {sortis}\n      Le conteneur tourne en root et /app/src est "
+           f"accessible en ecriture.\n      Portee : {portee}.")
+
+
+@test("SEC-G08", "Une archive hostile n'ecrit pas hors du repertoire d'extraction", "G-08")
+def zip_confine():
+    """« Zip slip » : une entree d'archive nommee `../../x` ou `/tmp/x` qui sortirait du
+    repertoire d'extraction. Deux sites concernes (`accounts.py:2795` et `3703`), tous deux
+    en aval d'un chemin dont G-07 a montre qu'il etait mal garde.
+
+    **Mesure, pas confiance en la documentation** : `zipfile.extractall` de CPython 3.12
+    retire les composants `..` et la racine des noms de membres — verifie ici, l'entree
+    `../../../../tmp/x` atterrit a `<extraction>/tmp/x`, contenue.
+
+    Le point important est que cette protection est **heritee de la bibliotheque standard**,
+    pas ecrite par l'application. Elle disparaitrait si quelqu'un remplacait `extractall`
+    par une boucle `zf.extract()` ou un `open(os.path.join(dir, nom))` — refactorisation
+    banale et sans rapport apparent avec la securite. Ce test surveille donc la propriete,
+    et le suivant la forme du code.
+    """
+    BOX.require()
+    import uuid
+    marque = "QA-SECG08-" + uuid.uuid4().hex[:8]
+    cibles = [f"/tmp/qa_secg08_rel_{marque}.txt", f"/tmp/qa_secg08_abs_{marque}.txt"]
+
+    code = (
+        "import io, json, os, shutil, tempfile, zipfile\n"
+        f"marque = {marque!r}\n"
+        f"cibles = {cibles!r}\n"
+        "t = io.BytesIO()\n"
+        "with zipfile.ZipFile(t, 'w') as zf:\n"
+        "    zf.writestr('../../../..' + cibles[0], marque)\n"
+        "    zf.writestr(cibles[1], marque)\n"
+        "    zf.writestr('Dossier/normal.txt', marque)\n"
+        "d = tempfile.mkdtemp(prefix='qa_secg08_')\n"
+        "try:\n"
+        "    with zipfile.ZipFile(io.BytesIO(t.getvalue())) as zf:\n"
+        "        zf.extractall(d)\n"
+        "    sortis = [c for c in cibles if os.path.exists(c)]\n"
+        "finally:\n"
+        "    shutil.rmtree(d, ignore_errors=True)\n"
+        "    for c in cibles:\n"
+        "        try:\n"
+        "            os.remove(c)\n"
+        "        except OSError:\n"
+        "            pass\n"
+        "print('__QA__' + json.dumps(sortis))\n")
+    sortie = BOX.python(code)
+    sortis = None
+    for ligne in sortie.splitlines():
+        if ligne.startswith("__QA__"):
+            sortis = json.loads(ligne[6:])
+    if sortis is None:
+        raise Skip(f"extraction de controle impossible : {sortie[-200:]}")
+    expect(not sortis,
+           f"une archive hostile a ecrit hors du repertoire d'extraction : {sortis}")
+
+
+@test("SEC-G09", "L'extraction d'archive reste confiee a extractall", "G-08")
+def extraction_par_extractall():
+    """Complement structurel de `SEC-G08`, et c'est le test qui protege reellement.
+
+    `SEC-G08` verifie un comportement fourni par CPython. Il restera vert quoi que fasse
+    l'application, tant qu'elle appelle `extractall`. Le jour ou quelqu'un ecrit une boucle
+    d'extraction a la main — pour filtrer les entrees, afficher une progression, ou toute
+    autre bonne raison — la protection disparait **sans qu'aucun test de comportement ne
+    change de couleur**.
+
+    On surveille donc la forme : aucune extraction membre par membre dans le code deploye.
+    Meme raisonnement que `SMTP-06` pour `starttls()`, et que la verification structurelle
+    de `ROB-21`.
+    """
+    BOX.require()
+    sortie = BOX.python(
+        "import json, inspect\n"
+        "import src.api.routes.accounts as A\n"
+        "src = inspect.getsource(A)\n"
+        "suspects = [l.strip()[:100] for l in src.splitlines()\n"
+        "            if '.extract(' in l or ('ZipFile' in l and '.open(' in l)]\n"
+        "print('__QA__' + json.dumps(suspects))\n")
+    suspects = None
+    for ligne in sortie.splitlines():
+        if ligne.startswith("__QA__"):
+            suspects = json.loads(ligne[6:])
+    if suspects is None:
+        raise Skip(f"lecture du source impossible : {sortie[-200:]}")
+    expect(not suspects,
+           "une extraction membre par membre est apparue : la protection contre le zip slip "
+           "venait de `extractall`, elle ne s'applique plus :\n      "
+           + "\n      ".join(suspects))

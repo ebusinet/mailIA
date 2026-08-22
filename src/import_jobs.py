@@ -8,6 +8,7 @@ This persists across container restarts via Docker volume.
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -29,8 +30,23 @@ def _ensure_dirs():
     FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 
+_MOTIF_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _check_job_id(job_id: str) -> str:
+    """Un identifiant de job sert a construire un chemin de fichier.
+
+    Il est genere par le serveur (prefixe d'UUID), mais il arrive aussi depuis l'URL
+    d'une requete : sans ce controle, `../../etc/passwd` designerait un autre fichier.
+    """
+    j = str(job_id or "")
+    if not _MOTIF_JOB_ID.match(j):
+        raise ValueError(f"invalid job id: {job_id!r}")
+    return j
+
+
 def _job_path(job_id: str) -> Path:
-    return JOBS_DIR / f"{job_id}.json"
+    return JOBS_DIR / f"{_check_job_id(job_id)}.json"
 
 
 def _save_job(job: dict):
@@ -138,7 +154,7 @@ def list_jobs(user_id: int) -> list[dict]:
 
 def get_job_file_dir(job_id: str) -> Path:
     """Get the directory for a job's uploaded files."""
-    d = FILES_DIR / job_id
+    d = FILES_DIR / _check_job_id(job_id)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -146,7 +162,7 @@ def get_job_file_dir(job_id: str) -> Path:
 def cleanup_job_files(job_id: str):
     """Remove uploaded files for a completed job."""
     import shutil
-    d = FILES_DIR / job_id
+    d = FILES_DIR / _check_job_id(job_id)
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
 

@@ -18,6 +18,39 @@ RATE_LIMIT_RULES = {
 }
 
 
+def _passerelle_par_defaut() -> str | None:
+    """Adresse par laquelle le trafic du mandataire entre dans le conteneur.
+
+    Lue dans la table de routage plutot que codee en dur : le sous-reseau Docker change
+    si le reseau est recree, et une valeur figee redeviendrait fausse en silence.
+    """
+    try:
+        with open("/proc/net/route") as f:
+            next(f)
+            for ligne in f:
+                champs = ligne.split()
+                if len(champs) > 2 and champs[1] == "00000000":
+                    brut = int(champs[2], 16)
+                    return ".".join(str((brut >> d) & 0xFF) for d in (0, 8, 16, 24))
+    except Exception:
+        pass
+    return None
+
+
+def _mandataires_de_confiance() -> set[str]:
+    import os
+    valeurs = {"127.0.0.1", "::1"}
+    passerelle = _passerelle_par_defaut()
+    if passerelle:
+        valeurs.add(passerelle)
+    supplement = os.environ.get("TRUSTED_PROXY_IPS", "")
+    valeurs.update(v.strip() for v in supplement.split(",") if v.strip())
+    return valeurs
+
+
+_MANDATAIRES = _mandataires_de_confiance()
+
+
 def _est_adresse_de_mandataire(valeur: str) -> bool:
     """Adresse appartenant a l'infrastructure : boucle locale ou reseau prive."""
     import ipaddress
@@ -40,6 +73,14 @@ def _get_client_ip(request: Request) -> str:
     qui n'appartient pas a l'infrastructure. Ce parcours ne depend pas du nombre de
     mandataires : ajouter un hop demain ne rouvre pas la faille.
     """
+    pair = request.client.host if request.client else None
+
+    # Un en-tete n'est digne de foi que s'il vient du mandataire. Sans ce controle,
+    # tout appelant capable d'atteindre le port de l'application — un conteneur voisin,
+    # par exemple — choisit sa propre cle de limitation en ecrivant X-Forwarded-For.
+    if pair not in _MANDATAIRES:
+        return pair or "unknown"
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         elements = [p.strip() for p in forwarded.split(",") if p.strip()]
@@ -55,7 +96,7 @@ def _get_client_ip(request: Request) -> str:
     real_ip = request.headers.get("x-real-ip")
     if real_ip and real_ip.strip():
         return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+    return pair or "unknown"
 
 
 _derniere_alerte = 0.0

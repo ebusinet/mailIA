@@ -331,6 +331,72 @@ inobservable — chacun avec sa raison affichée, jamais un succès silencieux.
 La couverture complète exige les deux exécutions : aucun test n'est ignoré sur les deux serveurs à
 la fois, ce que la suite vérifie explicitement.
 
+---
+
+# Phase 3 — Audit de sécurité méthodique (Plan G)
+
+Les sept failles trouvées lors des phases 1 et 2 l'avaient toutes été **au passage**, en testant
+autre chose. Aucune ne venait d'une recherche délibérée. Le Plan G est le premier à chercher
+méthodiquement — et il a trouvé en quelques heures trois failles dont deux critiques.
+
+| Faille | Nature | État |
+|---|---|---|
+| Le lien de réinitialisation ouvrait une session **administrateur complète** | critique | fermée |
+| La limitation de débit se contournait par un en-tête HTTP | élevée | fermée |
+| Un conteneur voisin contournait la limitation en évitant nginx | élevée | fermée |
+| **Écriture de fichier arbitraire, en root, par tout utilisateur authentifié** | **critique** | en cours |
+
+## Le lien de réinitialisation était une session administrateur
+
+La fonction qui valide les jetons de réinitialisation vérifiait leur nature ; celle qui valide les
+jetons d'accès ne le faisait pas. Les deux sont signés par la même clé. **L'asymétrie est ce qui
+trahit l'oubli** : l'auteur savait que ce contrôle comptait, dans un seul sens.
+
+Trois facteurs aggravaient : le jeton voyageait dans une URL — donc historique, journaux, email —
+il survivait à son usage, et son émission n'exigeait aucune authentification.
+
+Corrigé par une **séparation positive** : chaque jeton déclare sa nature, et l'absence de
+déclaration ne vaut plus autorisation. Conséquence visible : tous les jetons émis avant sont
+refusés, les utilisateurs doivent se reconnecter.
+
+## L'écriture de fichier arbitraire
+
+Le nom du fichier téléversé lors d'un import part tel quel vers le système de fichiers. Deux formes
+fonctionnent — chemin absolu et remontée par `..` — et le piège du correctif est contre-intuitif :
+assembler un chemin absolu à un répertoire **abandonne silencieusement le répertoire**. Interdire
+les `..` seuls ne fermerait rien.
+
+Ce qui en fait la faille la plus grave de la campagne : aucun garde administrateur, **conteneur
+exécuté en root**, sources de l'application accessibles en écriture. Écraser un fichier Python
+donnerait l'exécution de code dans le conteneur qui détient la clé chiffrant les mots de passe IMAP.
+
+Mesuré avec un compte non-administrateur créé pour l'occasion. La chaîne complète a quatre maillons ;
+trois sont mesurés, le dernier est déduit et ne sera pas exécuté.
+
+## Ce qui s'est révélé sain, et mesuré plutôt que supposé
+
+Six en-têtes de sécurité corrects sur neuf types de réponse, erreurs comprises. Aucune injection SQL
+sur cinq surfaces et onze charges, `pg_sleep` inclus. Élévation de privilège fermée, vérifiée avec un
+vrai compte non-administrateur. Aucun oracle distinguant un compte inexistant d'un compte non
+possédé. Onze variantes de jeton forgé toutes refusées.
+
+## Deux protections héritées, donc invisibles
+
+L'extraction d'archives ne permet pas d'échapper au répertoire — mais **parce que la bibliothèque
+Python réécrit les noms**, pas parce que le code s'en assure. De même, l'API REST résistait à
+l'injection IMAP parce qu'un champ retirait les guillemets, sans intention.
+
+Ces protections ne se voient nulle part dans le code, donc rien n'avertit celui qui les retire un
+jour pour une raison sans rapport. Deux tests ont été écrits pour chacune : un pour la propriété,
+un pour la **forme du code**.
+
+## Une décision d'infrastructure à prendre
+
+Le conteneur applicatif s'exécute en **root**, avec les sources accessibles en écriture. Ce n'est
+pas un défaut du code — c'est ce qui transforme une écriture hors périmètre en exécution de code.
+Faire tourner le processus sous un utilisateur non privilégié réduirait la gravité de toute une
+classe de défauts, connus et à venir.
+
 ## 7. Décisions qui vous appartiennent
 
 ### 7.0 L'angle mort qui grandit : le worker n'a jamais tourné

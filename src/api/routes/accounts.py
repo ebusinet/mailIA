@@ -112,6 +112,40 @@ def _require_server_path(path: str) -> str:
     return resolved
 
 
+def _require_upload_filename(nom: str | None, job_dir) -> str:
+    """Confine un fichier televerse au repertoire de son job (G-07).
+
+    `filename` vient de l'en-tete Content-Disposition, donc de l'appelant. Deux pieges :
+
+    - `os.path.basename()` seul ne suffit pas, et le cas absolu est le plus vicieux :
+      `Path("/data/imports/job123") / "/tmp/x"` vaut `/tmp/x` — l'operateur `/` de
+      pathlib **abandonne la partie gauche** quand la droite est absolue. Interdire
+      seulement `..` ne fermerait donc rien.
+    - le conteneur tourne en root avec `/app/src` accessible en ecriture : une ecriture
+      hors perimetre vaut execution de code au redemarrage suivant.
+
+    D'ou la meme defense en deux temps que pour `_require_server_path` : normaliser,
+    **puis** verifier l'appartenance. Le second temps rattrape ce qu'on n'a pas prevu.
+    """
+    import os
+
+    brut = (nom or "").strip()
+    # Certains clients envoient un chemin complet, separateurs Windows compris.
+    base = os.path.basename(brut.replace("\\", "/"))
+    if base in ("", ".", "..") or "/" in base or "\0" in base:
+        raise HTTPException(
+            status_code=422,
+            detail="Nom de fichier invalide. Envoyez un nom simple, sans chemin.",
+        )
+
+    racine = os.path.realpath(str(job_dir))
+    chemin = os.path.realpath(os.path.join(racine, base))
+    if chemin != racine and not chemin.startswith(racine + os.sep):
+        logger.warning("import-mbox refuse : %r resolu en %r, hors de %r", nom, chemin, racine)
+        raise HTTPException(status_code=422, detail="Nom de fichier invalide.")
+    return chemin
+
+
 def _imap_http_error(e: Exception, action: str = "operation IMAP") -> HTTPException:
     """Ne pas renvoyer le message brut du serveur IMAP au client (R-10).
 
@@ -2544,7 +2578,12 @@ async def import_mbox(
     filename = file.filename or "upload.mbox"
     job = create_job(user.id, account_id, filename, source="upload")
     job_dir = get_job_file_dir(job["id"])
-    file_path = str(job_dir / filename)
+    try:
+        file_path = _require_upload_filename(filename, job_dir)
+    except HTTPException:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        update_job(job["id"], status="error", error="Nom de fichier invalide")
+        raise
 
     try:
         with open(file_path, "wb") as f:
