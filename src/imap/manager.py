@@ -185,6 +185,13 @@ class IMAPManager:
         # FETCH partirait sur le dossier d'une autre requete — sans que rien ne le montre,
         # les UID etant propres a chaque boite. Qui ajoute un pool doit d'abord proteger
         # ce marqueur, ou retirer `reutiliser_selection`.
+        #
+        # Un pool casse AUSSI la protection de fait sur les deplacements concurrents. Deux
+        # requetes dupliquent un message des que le SELECT de l'une precede le MOVE de
+        # l'autre : la fenetre mesuree vaut ~6 ms, et l'API n'espace ses requetes de ~200 ms
+        # que grace au preambule (TLS, HTTP, connexion et login IMAP). Un pool supprime
+        # precisement ce preambule. Le verrou applicatif, ecarte aujourd'hui faute de cas
+        # atteignable, deviendrait alors necessaire.
         self._selection: tuple[str, bool] | None = None
         self._capacites: set[str] = set()
 

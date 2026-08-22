@@ -459,6 +459,27 @@ La commande atomique du protocole (`UID MOVE`) réduit la fenêtre de trois comm
 ferme pas la course : **mesurée à 0/6 duplications sur un serveur et 6/6 sur l'autre**. Atomique
 comme commande, pas comme transaction — chaque session garde sa vue jusqu'à la notification de
 suppression.
+
+### Où se trouve exactement la fenêtre, et pourquoi elle est hors d'atteinte
+
+La fenêtre n'est pas la durée de la commande, mais **l'intervalle entre l'ouverture du dossier et
+l'opération** : dès qu'une session a ouvert le dossier, elle détient un instantané où le message
+existe, et elle le croira présent jusqu'à recevoir la notification de suppression — même vingt
+millisecondes plus tard.
+
+| | |
+|---|---|
+| Fenêtre de course mesurée | **~6 ms** |
+| Espacement naturel de deux requêtes par l'API | **~200 ms** |
+| Marge | **facteur 30** |
+
+Le défaut n'est donc ni fermé ni ouvert : il est **inatteignable par un facteur trente, et ce
+facteur est le coût du préambule** — connexion, authentification, ouverture de session IMAP.
+
+Ce qui donne le déclencheur exact plutôt qu'une inquiétude vague : **un pool de connexions
+supprimerait précisément ce préambule.** Il rendrait la fenêtre atteignable, et casserait au passage
+la sûreté de la réutilisation de sélection. Les deux risques ont la même cause et le même
+avertissement dans le code.
 - Et déplacer un message inexistant répond « déplacé » — donc dans une course, **les deux clients
   reçoivent un succès alors qu'un seul a agi**.
 
