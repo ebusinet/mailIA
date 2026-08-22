@@ -447,6 +447,18 @@ commandes successives, aucune transaction.
 
 - Deux déplacements simultanés du même message produisent **deux copies**.
 - Deux suppressions simultanées, de même.
+
+Et la formulation exacte compte, parce qu'elle est plus sévère que « il existe une course » :
+
+> La duplication n'est pas un aléa rare : c'est **l'issue garantie** dès que deux sessions se
+> recouvrent au niveau du protocole. Ce qui est accidentel, c'est qu'on ne l'observe pas par l'API
+> — le coût d'établissement des connexions désaligne les requêtes. Une machine plus rapide ou un
+> pool de connexions ferait disparaître cette protection fortuite.
+
+La commande atomique du protocole (`UID MOVE`) réduit la fenêtre de trois commandes à une, mais ne
+ferme pas la course : **mesurée à 0/6 duplications sur un serveur et 6/6 sur l'autre**. Atomique
+comme commande, pas comme transaction — chaque session garde sa vue jusqu'à la notification de
+suppression.
 - Et déplacer un message inexistant répond « déplacé » — donc dans une course, **les deux clients
   reçoivent un succès alors qu'un seul a agi**.
 

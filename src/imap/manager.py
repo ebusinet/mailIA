@@ -178,7 +178,13 @@ class IMAPManager:
     def __init__(self, config: IMAPConfig):
         self.config = config
         self._conn: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
-        # (dossier, readonly) actuellement selectionne, ou None si inconnu.
+        # (dossier, readonly) actuellement selectionne. La sûrete de `reutiliser_selection`
+        # tient a ce qu'AUCUN IMAPManager n'est partage : `get_imap()` rend une instance
+        # neuve a chaque appel et les 26 instanciations cote API sont a portee locale.
+        # ATTENTION : introduire un pool de connexions rend ce marqueur concurrent, et un
+        # FETCH partirait sur le dossier d'une autre requete — sans que rien ne le montre,
+        # les UID etant propres a chaque boite. Qui ajoute un pool doit d'abord proteger
+        # ce marqueur, ou retirer `reutiliser_selection`.
         self._selection: tuple[str, bool] | None = None
         self._capacites: set[str] = set()
 
