@@ -171,6 +171,86 @@ modifications antérieures à la campagne.
 
 ---
 
+---
+
+# Phase 2 — Plans de test complémentaires (22 août, journée)
+
+La première campagne était une chasse aux régressions : elle a corrigé ce qui était cassé. La
+seconde a cherché ce que personne n'avait encore regardé. Elle a trouvé **cinq injections de
+commande IMAP**, dont une exploitable par un tiers extérieur.
+
+## Ce que le Plan A a trouvé
+
+Le raisonnement était simple : le défaut le plus grave de la première campagne — la destruction
+d'un email — avait été trouvé **par accident**, en passant une valeur vide. La famille n'avait
+jamais été explorée. Elle l'a été.
+
+| Défaut | Nature | Gravité |
+|---|---|---|
+| Renommer un dossier nommé `.` ou `..` | détruit toute l'arborescence | destruction de données |
+| `uid` acceptant une plage IMAP (`1:*`) | vide un dossier en un appel | destruction de données |
+| Injection via les critères et champs de recherche (9 surfaces) | commande arbitraire | sécurité |
+| Injection via le drapeau IMAP (4 chemins) | commande arbitraire | sécurité |
+| **Injection via le `Message-ID`** | **commande arbitraire, déclenchée par un email reçu** | **sécurité** |
+| Lecture de fichier arbitraire (import par chemin) | exfiltration, administrateurs seulement | sécurité |
+| Action de règle perdue silencieusement | règle acceptée qui ne fait rien | fonctionnel |
+| Recherche par objet accentué | échec systématique (antérieur) | fonctionnel |
+
+**Le plus grave est l'injection par `Message-ID`.** La reconstitution d'un fil de discussion
+construit sa requête à partir d'en-têtes **écrits par l'expéditeur**. Il suffit donc d'envoyer un
+email pour armer la charge — aucun compte, aucun accès à l'application. Et la fonction concernée
+est un outil que l'assistant IA appelle spontanément.
+
+Tous sont corrigés, déployés, et vérifiés par au moins deux mesures indépendantes.
+
+## Ce que le Plan B a démontré, et qui contredit son hypothèse
+
+Le second serveur IMAP (Dovecot) avait été ajouté sur l'idée que GreenMail, permissif, masquait des
+défauts qu'un serveur strict révélerait. **C'est l'inverse qui s'est produit, et dans les deux
+sens le même jour :**
+
+| Défaut | Serveur permissif | Serveur strict |
+|---|---|---|
+| Injection `Message-ID` | **prouve** l'exploit | conclut à tort « non exploitable » |
+| Recherche accentuée | dément à tort le correctif | **prouve** qu'il fonctionne |
+
+> La valeur d'un second serveur n'est pas qu'il soit plus strict — c'est qu'il soit **différent**.
+> On ne teste pas la conformité du serveur, on teste ce que fait l'application quand le serveur ne
+> l'aide pas.
+
+**Conséquence opérationnelle** : un test de sécurité qui conclut « aucun effet observé » doit
+tourner sur le serveur le plus **permissif** ; un test fonctionnel qui conclut « la requête
+fonctionne » sur le plus **strict**. La suite de tests faisait l'inverse par défaut.
+
+## Trois règles qui survivront à ce projet
+
+Les six désaccords de la journée entre les trois intervenants — y compris ceux où le chef de projet
+avait tort — ont tous été tranchés par une mesure, jamais par un argument. Ils se ramènent à trois
+formules :
+
+- **Une absence d'effet n'est pas un refus.** Une injection qui ne produit rien peut être bloquée
+  par accident. Trois occurrences.
+- **Une absence de signal n'est pas une absence de contrôle.** Une recherche qui ne trouve pas la
+  dépendance attendue ne prouve pas que le contrôle manque. Trois occurrences.
+- **Un état observé n'est pas un état courant.** Des données invalides en base peuvent être les
+  vestiges d'avant le correctif.
+
+Une quatrième s'y est ajoutée en fin de journée : **vérifier qu'une protection existe n'est pas
+vérifier qu'elle est employée** — un test interrogeait la fonction de protection, qui refusait
+correctement, pendant que le site d'appel ne l'utilisait pas.
+
+## Un refus qui vaut d'être noté
+
+Pour rendre testable le chemin TLS, un mécanisme installait un certificat de test dans le conteneur
+applicatif. Il a été **abandonné** : ce conteneur détient les identifiants IMAP du compte
+professionnel, et la clé privée du certificat est versionnée dans le dépôt. Le bénéfice aurait été
+de faire passer un test au vert ; le coût, de permettre à quiconque possède cette clé de se faire
+passer pour n'importe quel serveur. Le test reste marqué « non exécutable », avec sa raison.
+
+## État de la suite de tests
+
+100 tests au total, dont 22 issus du Plan A. Chaque défaut trouvé a son test.
+
 ## 7. Décisions qui vous appartiennent
 
 ### 7.1 Redémarrer le worker et le planificateur
