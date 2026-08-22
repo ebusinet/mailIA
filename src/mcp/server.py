@@ -26,7 +26,7 @@ from pydantic import Field
 
 from src.config import get_settings
 from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName,
-                              NoTrashFolder,
+                              MessageGone, NoTrashFolder,
                               InvalidUid, _check_target, _check_uid, _check_uid_list,
                               _decode_imap_utf7, _encode_imap_utf7, _imap_astring,
                               _imap_criteria, _imap_quote, _uid_search)
@@ -216,7 +216,7 @@ class ToolActivityMiddleware(Middleware):
             status = "error"
             raise
         except (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName, InvalidUid,
-                NoTrashFolder,
+                MessageGone, NoTrashFolder,
                 imaplib.IMAP4.error) as e:
             # Single choke point: every tool reports IMAP trouble the same way,
             # instead of leaking imaplib's internals to the client.

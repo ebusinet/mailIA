@@ -17,8 +17,8 @@ from src.db.models import User, MailAccount, LocalFolder, LocalEmail, SpamWhitel
 from src.api.deps import get_current_user
 from src.security import encrypt_value
 from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag,
-                              InvalidFolderName, InvalidUid, NoTrashFolder, _imap_astring,
-                              _imap_quote, _uid_search)
+                              InvalidFolderName, InvalidUid, MessageGone, NoTrashFolder,
+                              _imap_astring, _imap_quote, _uid_search)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -161,6 +161,10 @@ def _imap_http_error(e: Exception, action: str = "operation IMAP") -> HTTPExcept
             status_code=404,
             detail="Dossier introuvable ou impossible a ouvrir sur le serveur de messagerie.",
         )
+    if isinstance(e, MessageGone):
+        # 404 et non 502 : ce n'est pas le serveur qui a refuse, c'est le message qui
+        # n'est plus la. En course, le perdant doit pouvoir le distinguer.
+        return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, NoTrashFolder):
         # 409 : la demande est legitime mais ne peut aboutir sans confirmation explicite.
         return HTTPException(status_code=409, detail=str(e))

@@ -61,6 +61,15 @@ class ImapInjection(ValueError):
     """A value that would break out of the IMAP command it is embedded in."""
 
 
+class MessageGone(Exception):
+    """Le message designe n'est plus la : rien n'a ete deplace ni supprime.
+
+    Distinct d'un echec serveur. En concurrence, deux clients demandent le meme
+    deplacement, un seul agit — et le second doit l'apprendre. Sans ca les deux
+    recevaient « deplace », le perdant croyait avoir travaille, et cette illusion
+    masquait les vraies duplications."""
+
+
 class NoTrashFolder(Exception):
     """No Trash folder, so deleting would purge instead of moving.
 
@@ -171,6 +180,7 @@ class IMAPManager:
         self._conn: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
         # (dossier, readonly) actuellement selectionne, ou None si inconnu.
         self._selection: tuple[str, bool] | None = None
+        self._capacites: set[str] = set()
 
     def connect(self):
         if self.config.ssl:
@@ -185,6 +195,13 @@ class IMAPManager:
             auth_string = f"\x00{self.config.user}\x00{self.config.password}"
             self._conn.authenticate("PLAIN", lambda _: auth_string.encode("utf-8"))
         self._selection = None
+        # imaplib garde les capacites annoncees AVANT authentification : sur Dovecot,
+        # MOVE et UIDPLUS n'y figurent pas alors que le serveur les supporte. On redemande.
+        try:
+            typ, data = self._conn.capability()
+            self._capacites = set(data[0].decode().upper().split()) if typ == "OK" and data[0] else set()
+        except Exception:
+            self._capacites = set()
         logger.info(f"Connected to {self.config.host} as {self.config.user}")
 
     def disconnect(self):
@@ -411,6 +428,50 @@ class IMAPManager:
         except Exception as e:
             logger.error(f"Rollback of copy {copied_uids} in {to_folder} failed: {e}")
 
+    def _oublier_copyuid(self) -> None:
+        """A appeler AVANT un COPY ou un MOVE : `untagged_responses` s'accumule, et un
+        COPYUID laisse par une commande precedente se lirait comme un succes."""
+        try:
+            self._conn.untagged_responses.pop("COPYUID", None)
+        except Exception:
+            pass
+
+    def _copyuid(self, reponse) -> str | None:
+        """UID attribues dans la cible, d'apres COPYUID (UIDPLUS).
+
+        Son absence est la seule preuve fiable que rien n'a bouge : `UID COPY 999999`
+        et `UID MOVE 999999` repondent tous deux `OK` sur les deux serveurs testes.
+
+        Deux emplacements selon la commande, mesures et non supposes :
+        - `UID COPY` le met dans la reponse **taguee** ;
+        - `UID MOVE` (RFC 6851) dans une reponse **non taguee** `* OK [COPYUID ...]`,
+          qu'imaplib range dans `untagged_responses`.
+        """
+        for part in reponse or []:
+            texte = part.decode(errors="replace") if isinstance(part, bytes) else str(part)
+            m = re.search(r"COPYUID \d+ \S+ (\S+?)[\]\s]", texte)
+            if m:
+                return m.group(1)
+        try:
+            brut = self._conn.untagged_responses.get("COPYUID")
+        except Exception:
+            brut = None
+        for part in brut or []:
+            texte = part.decode(errors="replace") if isinstance(part, bytes) else str(part)
+            champs = texte.strip().rstrip("]").split()
+            if len(champs) >= 3:
+                return champs[2]
+        return None
+
+    def _uid_existe(self, uid: str) -> bool:
+        """Repli pour les serveurs sans UIDPLUS : un aller-retour de plus, mais un
+        « deplace » annonce a tort coute plus cher qu'un SEARCH."""
+        try:
+            status, data = self._conn.uid("SEARCH", None, f"UID {uid}")
+            return status == "OK" and bool(data and data[0] and data[0].split())
+        except Exception:
+            return True  # dans le doute, on laisse la commande decider
+
     def move_email(self, uid: str, from_folder: str, to_folder: str) -> bool:
         """Move an email to another folder via IMAP. Creates folder if needed."""
         _check_uid(uid)
@@ -420,8 +481,32 @@ class IMAPManager:
         self._select(from_folder)
         # Ensure target folder exists
         self._conn.create(_imap_quote(to_folder))
+
+        avec_uidplus = "UIDPLUS" in self._capacites
+        if not avec_uidplus and not self._uid_existe(uid):
+            raise MessageGone(f"Message {uid} is no longer in '{from_folder}'")
+
+        if "MOVE" in self._capacites:
+            # RFC 6851 : une seule commande au lieu de trois. Reduit la fenetre de course
+            # et divise par trois les allers-retours. Ne la SUPPRIME pas : deux MOVE
+            # simultanes sur le meme UID dupliquent encore sur Dovecot (mesure), chaque
+            # session gardant sa propre vue tant qu'elle n'a pas recu l'EXPUNGE.
+            self._oublier_copyuid()
+            status, move_data = self._conn.uid("MOVE", uid, _imap_quote(to_folder))
+            if status != "OK":
+                logger.error(f"MOVE failed for UID {uid} to {to_folder}")
+                return False
+            if avec_uidplus and self._copyuid(move_data) is None:
+                raise MessageGone(f"Message {uid} is no longer in '{from_folder}'")
+            self._selection = None  # le serveur a expunge sous nous
+            logger.info(f"Moved UID {uid}: {from_folder} -> {to_folder}")
+            return True
+
         # Copy then delete (MOVE not supported everywhere)
+        self._oublier_copyuid()
         status, copy_data = self._conn.uid("COPY", uid, _imap_quote(to_folder))
+        if avec_uidplus and status == "OK" and self._copyuid(copy_data) is None:
+            raise MessageGone(f"Message {uid} is no longer in '{from_folder}'")
         if status != "OK":
             logger.error(f"Failed to copy UID {uid} to {to_folder}")
             return False
