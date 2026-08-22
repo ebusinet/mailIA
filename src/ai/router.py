@@ -49,6 +49,9 @@ async def get_llm_for_user(
     result = await db.execute(query)
     provider_config = result.scalar_one_or_none()
 
+    if provider_config is None and provider_id:
+        raise LookupError(f"Provider {provider_id} not found")
+
     if provider_config is None:
         # Fallback: try user's first provider, then system default
         result = await db.execute(

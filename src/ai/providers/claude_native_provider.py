@@ -16,7 +16,11 @@ class ClaudeNativeProvider(LLMProvider):
                  mcp_servers: dict | None = None):
         self.api_key = api_key
         self.default_model = default_model
-        self.base_url = base_url.rstrip("/")
+        # Strip /claude/query suffix if user included it in the endpoint
+        url = base_url.rstrip("/")
+        if url.endswith("/claude/query"):
+            url = url[: -len("/claude/query")]
+        self.base_url = url
         self.mcp_servers = mcp_servers
 
     def _build_request(self, messages: list[AIMessage], model: str | None = None,
@@ -49,10 +53,9 @@ class ClaudeNativeProvider(LLMProvider):
 
     async def chat(self, messages: list[AIMessage], model: str | None = None) -> AIResponse:
         url = f"{self.base_url}/claude/query"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         body = self._build_request(messages, model, stream=False)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
@@ -75,10 +78,9 @@ class ClaudeNativeProvider(LLMProvider):
 
     async def stream_chat(self, messages: list[AIMessage], model: str | None = None):
         url = f"{self.base_url}/claude/query"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         body = self._build_request(messages, model, stream=True)
 
         yielded = False

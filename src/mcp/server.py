@@ -4,14 +4,17 @@ MailIA MCP Server — exposes email management tools for AI assistants.
 Run with:  python -m src.mcp.server
 Or:        fastmcp run src/mcp/server.py
 """
+import imaplib
 import json
 import logging
 import os as _os
+import re
 import smtplib
 import ssl as ssl_mod
 import time as _time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate
 from email.mime.text import MIMEText
 from typing import Annotated
 
@@ -22,7 +25,11 @@ from fastmcp.server.middleware import Middleware
 from pydantic import Field
 
 from src.config import get_settings
-from src.imap.manager import _decode_imap_utf7, _encode_imap_utf7
+from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName,
+                              MessageGone, NoTrashFolder,
+                              InvalidUid, _check_target, _check_uid, _check_uid_list,
+                              _decode_imap_utf7, _encode_imap_utf7, _imap_astring,
+                              _imap_criteria, _imap_quote, _uid_search)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-mailia")
@@ -30,10 +37,58 @@ logger = logging.getLogger("mcp-mailia")
 
 def _normalize_folder(folder: str) -> str:
     """Ensure folder name is UTF-8. Decodes IMAP UTF-7 if detected."""
-    import re
     if re.search(r'&[A-Za-z0-9+,]+-', folder):
         return _decode_imap_utf7(folder)
     return folder
+
+
+_NO_DKIM = "No DKIM signature"  # informational, not a red flag
+
+
+async def _assert_account(account_id):
+    """Validate an account_id used only as a filter.
+
+    These tools are already isolated by partitioning (per-user ES index, user_id filter),
+    so this is redundant today. It makes the ownership invariant uniform across all tools
+    and therefore testable the same way everywhere, instead of resting on a second model
+    that no cloisonnement probe exercises.
+    """
+    if not account_id:
+        return
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account
+    async with get_db() as db:
+        await get_account(db, _user_id(), account_id)
+
+
+async def _get_llm(db, user):
+    """Resolve the user's AI provider, reporting failures as ToolError like every other tool."""
+    from src.ai.router import get_llm_for_user
+    try:
+        return await get_llm_for_user(db, user)
+    except Exception as e:
+        raise ToolError(f"AI provider unavailable: {e}")
+
+
+async def _es_delete_folder_docs(user_id: int, account_id: int, folder: str):
+    """Drop every indexed doc of a folder. Called when the folder itself disappears —
+    otherwise ghost docs keep inflating search_emails, count_emails and get_folders_stats."""
+    try:
+        from src.search.indexer import get_es_client, _index_name
+        es = await get_es_client()
+        names = {folder, _encode_imap_utf7(folder)}
+        await es.delete_by_query(
+            index=_index_name(user_id),
+            body={"query": {"bool": {"filter": [
+                {"term": {"account_id": account_id}},
+                {"terms": {"folder": list(names)}},
+            ]}}},
+            conflicts="proceed",
+            refresh=True,
+        )
+        await es.close()
+    except Exception as e:
+        logger.warning(f"ES folder cleanup failed for {folder}: {e}")
 
 
 async def _es_delete_docs(user_id: int, account_id: int, folder: str, uids: list[str]):
@@ -56,6 +111,52 @@ async def _es_delete_docs(user_id: int, account_id: int, folder: str, uids: list
         await es.close()
     except Exception as e:
         logger.warning(f"ES cleanup failed: {e}")
+
+
+async def _es_reindex_recent(account, folder: str, count: int) -> int:
+    """After a MOVE, fetch the N most recent UIDs in `folder` via IMAP and index them
+    in Elasticsearch. Idempotent: upserts by (account_id, folder, uid).
+    Returns number of emails indexed."""
+    if count <= 0:
+        return 0
+    try:
+        from src.imap.manager import _imap_quote
+        from src.mcp.context import get_imap
+        from src.search.indexer import get_es_client, bulk_index_emails, ensure_index
+
+        imap = get_imap(account)
+        imap.connect()
+        try:
+            quoted = _imap_quote(folder)
+            imap._conn.select(quoted, readonly=True)
+            status, data = imap._conn.uid("SEARCH", None, "ALL")
+            if status != "OK" or not data or not data[0]:
+                return 0
+            all_uids = data[0].decode().split()
+            # Take the most recent UIDs (tail)
+            recent = all_uids[-count:] if len(all_uids) > count else all_uids
+            contexts = []
+            for u in recent:
+                try:
+                    ctx = imap.fetch_email(u, folder)
+                    if ctx:
+                        contexts.append(ctx)
+                except Exception:
+                    continue
+        finally:
+            imap.disconnect()
+
+        if not contexts:
+            return 0
+        es = await get_es_client()
+        try:
+            await ensure_index(es, account.user_id)
+            return await bulk_index_emails(es, account.user_id, account.id, contexts)
+        finally:
+            await es.close()
+    except Exception as e:
+        logger.warning(f"ES reindex after move failed for {folder}: {e}")
+        return 0
 
 # User ID is configured at startup via env var MCP_USER_ID
 USER_ID: int = 0
@@ -111,6 +212,16 @@ class ToolActivityMiddleware(Middleware):
         try:
             result = await call_next(context)
             status = "done"
+        except ToolError:
+            status = "error"
+            raise
+        except (FolderNotSelectable, ImapInjection, InvalidFlag, InvalidFolderName, InvalidUid,
+                MessageGone, NoTrashFolder,
+                imaplib.IMAP4.error) as e:
+            # Single choke point: every tool reports IMAP trouble the same way,
+            # instead of leaking imaplib's internals to the client.
+            status = f"error: {str(e)[:80]}"
+            raise ToolError(f"IMAP error: {e}")
         except Exception as e:
             status = f"error: {str(e)[:80]}"
             raise
@@ -191,6 +302,7 @@ async def search_emails(
     from src.mcp.context import get_es
     from src.search.indexer import search_emails as _search
 
+    await _assert_account(account_id)
     uid = _user_id()
     es = await get_es()
     try:
@@ -205,6 +317,7 @@ async def search_emails(
         for hit in hits["hits"]:
             src = hit["_source"]
             results.append({
+                "account_id": src.get("account_id"),
                 "uid": src.get("uid"),
                 "folder": src.get("folder"),
                 "from": src.get("from_addr"),
@@ -219,6 +332,19 @@ async def search_emails(
         await es.close()
 
 
+_EMBEDDING_MODEL = None
+
+
+def _encode_query(query: str) -> list[float]:
+    """Encode a query, keeping the model in memory (it was reloaded on every call)."""
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        from src.search.indexer import EMBEDDING_MODEL_NAME
+        _EMBEDDING_MODEL = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    return _EMBEDDING_MODEL.encode(query).tolist()
+
+
 @mcp.tool(tags={"search"})
 async def semantic_search(
     query: Annotated[str, Field(description="Natural language query for semantic similarity search")],
@@ -227,18 +353,41 @@ async def semantic_search(
     """Search emails by semantic similarity using vector embeddings.
     Best for finding conceptually related emails rather than exact keyword matches."""
     from src.mcp.context import get_es
-    from src.search.indexer import semantic_search as _semantic
+    from src.search.indexer import semantic_search as _semantic, _index_name, EMBEDDING_DIMS, EMBEDDING_MODEL_NAME
 
     uid = _user_id()
-    # Generate embedding from query
-    try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        embedding = model.encode(query).tolist()
-    except Exception as e:
-        raise ToolError(f"Embedding generation failed: {e}")
-
     es = await get_es()
+
+    # Nothing ever writes the `embedding` field (neither index_email nor
+    # bulk_index_emails populate it), so the kNN query can only fail or return
+    # nothing. Say so plainly instead of surfacing an Elasticsearch dimension error.
+    try:
+        indexed = await es.count(
+            index=_index_name(uid), body={"query": {"exists": {"field": "embedding"}}}
+        )
+        embedded_docs = indexed.get("count", 0)
+    except Exception:
+        embedded_docs = 0
+    if not embedded_docs:
+        await es.close()
+        raise ToolError(
+            "Semantic search is unavailable: no email in the index carries an embedding "
+            "vector. Embeddings are never generated at indexing time, so this feature is "
+            "inert until that is implemented. Use search_emails (full-text) instead."
+        )
+
+    try:
+        embedding = _encode_query(query)
+    except Exception as e:
+        await es.close()
+        raise ToolError(f"Embedding generation failed: {e}")
+    if len(embedding) != EMBEDDING_DIMS:
+        await es.close()
+        raise ToolError(
+            f"Embedding model produces {len(embedding)} dimensions but the index declares "
+            f"{EMBEDDING_DIMS}. The two must match; the index would have to be recreated."
+        )
+
     try:
         raw = await _semantic(es, uid, query_embedding=embedding, size=size)
         hits = raw["hits"]["hits"]
@@ -246,6 +395,7 @@ async def semantic_search(
         for hit in hits:
             src = hit["_source"]
             results.append({
+                "account_id": src.get("account_id"),
                 "uid": src.get("uid"),
                 "folder": src.get("folder"),
                 "from": src.get("from_addr"),
@@ -270,6 +420,7 @@ async def count_emails(
     from src.mcp.context import get_es
     from src.search.indexer import _index_name
 
+    await _assert_account(account_id)
     uid = _user_id()
     index = _index_name(uid)
     es = await get_es()
@@ -314,6 +465,7 @@ async def get_folders_stats(
     from src.mcp.context import get_es
     from src.search.indexer import _index_name
 
+    await _assert_account(account_id)
     uid = _user_id()
     index = _index_name(uid)
     es = await get_es()
@@ -350,6 +502,7 @@ async def get_senders_stats(
     from src.mcp.context import get_es
     from src.search.indexer import _index_name
 
+    await _assert_account(account_id)
     uid = _user_id()
     index = _index_name(uid)
     es = await get_es()
@@ -416,7 +569,7 @@ async def read_email(
     try:
         ctx = imap.fetch_email(uid, folder)
         if not ctx:
-            raise ToolError(f"Email UID {uid} not found in {folder}")
+            raise ToolError(f"Email UID {uid} not found in '{folder}' (check the folder exists)")
         return {
             "uid": ctx.uid,
             "folder": ctx.folder,
@@ -461,6 +614,8 @@ async def list_emails(
                 ctx = imap.fetch_email(u, folder)
                 if ctx:
                     emails.append({
+                        "account_id": account_id,
+                        "folder": folder,
                         "uid": ctx.uid,
                         "from": ctx.from_addr,
                         "subject": ctx.subject,
@@ -469,7 +624,7 @@ async def list_emails(
                     })
             except Exception:
                 pass
-        return {"folder": folder, "count": len(emails), "emails": emails}
+        return {"account_id": account_id, "folder": folder, "count": len(emails), "emails": emails}
     finally:
         imap.disconnect()
 
@@ -502,17 +657,17 @@ async def search_folder(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder), readonly=True)
+        imap._select(folder, readonly=True)
 
         search_parts = []
         if from_addr:
-            search_parts.append(f'FROM "{from_addr}"')
+            search_parts.append(f'FROM {_imap_astring(from_addr, "from_addr")}')
         if to_addr:
-            search_parts.append(f'TO "{to_addr}"')
+            search_parts.append(f'TO {_imap_astring(to_addr, "to_addr")}')
         if subject:
-            search_parts.append(f'SUBJECT "{subject}"')
+            search_parts.append(f'SUBJECT {_imap_astring(subject, "subject")}')
         if text:
-            search_parts.append(f'TEXT "{text}"')
+            search_parts.append(f'TEXT {_imap_astring(text, "text")}')
         if date_from:
             from datetime import datetime
             d = datetime.strptime(date_from, "%Y-%m-%d")
@@ -526,12 +681,7 @@ async def search_folder(
             return {"error": "At least one search filter is required"}
 
         criteria = ' '.join(search_parts)
-        charset = None
-        try:
-            criteria.encode('ascii')
-        except UnicodeEncodeError:
-            charset = 'UTF-8'
-        status, data = imap._conn.uid("SEARCH", charset, criteria)
+        status, data = _uid_search(imap._conn, criteria)
         all_uids = data[0].decode().split() if status == "OK" and data[0] else []
         total = len(all_uids)
 
@@ -548,6 +698,8 @@ async def search_folder(
                 ctx = imap.fetch_email(u, folder)
                 if ctx:
                     emails.append({
+                        "account_id": account_id,
+                        "folder": folder,
                         "uid": ctx.uid,
                         "from": ctx.from_addr,
                         "subject": ctx.subject,
@@ -556,7 +708,7 @@ async def search_folder(
                     })
             except Exception:
                 pass
-        return {"folder": folder, "total_matches": total, "count": len(emails), "emails": emails}
+        return {"account_id": account_id, "folder": folder, "total_matches": total, "count": len(emails), "emails": emails}
     finally:
         imap.disconnect()
 
@@ -654,8 +806,9 @@ async def move_email(
     finally:
         imap.disconnect()
 
-    # Remove old ES doc (new folder will be indexed on next sync)
+    # Keep ES in sync: remove old source doc, index the new one in the destination
     await _es_delete_docs(user_id, account_id, folder, [uid])
+    await _es_reindex_recent(account, target_folder, count=1)
 
     return {"status": "moved", "uid": uid, "from": folder, "to": target_folder}
 
@@ -687,16 +840,21 @@ async def move_emails_bulk(
 
         total_moved = 0
         total_failed = 0
+        moved_by_target: dict[str, int] = {}
         for (from_folder, to_folder), uids in groups.items():
             result = imap.move_emails_bulk(uids, from_folder, to_folder)
             total_moved += result["moved"]
             total_failed += result["failed"]
+            moved_by_target[to_folder] = moved_by_target.get(to_folder, 0) + result["moved"]
     finally:
         imap.disconnect()
 
-    # Remove old ES docs for moved emails (new folder indexed on next sync)
+    # Keep ES in sync: remove old source docs, reindex the N most recent UIDs
+    # in each destination folder (the ones that just arrived via COPY).
     for (from_folder, _), uids in groups.items():
         await _es_delete_docs(user_id, account_id, from_folder, uids)
+    for to_folder, n in moved_by_target.items():
+        await _es_reindex_recent(account, to_folder, count=n)
 
     return {"moved": total_moved, "failed": total_failed}
 
@@ -741,8 +899,10 @@ async def delete_email(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uid: Annotated[str, Field(description="Email UID")],
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
 ) -> dict:
-    """Delete a single email (moves to Trash or flags as Deleted).
+    """Delete a single email: moves it to Trash. Fails if the server has no Trash folder,
+    unless permanent=true is passed to confirm the message will be destroyed for good.
     WARNING: For deleting multiple emails, ALWAYS use search_and_delete_emails (by criteria)
     or delete_emails_bulk (by UIDs) instead — they are 50-100x faster."""
     from src.mcp.context import get_db, get_imap
@@ -756,14 +916,16 @@ async def delete_email(
     imap = get_imap(account)
     imap.connect()
     try:
-        ok = imap.delete_email(uid, folder)
+        ok = imap.delete_email(uid, folder, permanent=permanent)
+        recoverable = getattr(imap, "last_delete_recoverable", not permanent)
     finally:
         imap.disconnect()
 
     if ok:
         await _es_delete_docs(user_id, account_id, folder, [uid])
 
-    return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder}
+    return {"status": "deleted" if ok else "failed", "uid": uid, "folder": folder,
+            "recoverable": recoverable if ok else None}
 
 
 @mcp.tool(tags={"action"})
@@ -771,6 +933,7 @@ async def delete_emails_bulk(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder: Annotated[str, Field(description="Folder name (use display name with accents, e.g. 'Éléments supprimés')")],
     uids: Annotated[list[str], Field(description="List of email UIDs to delete")],
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
 ) -> dict:
     """Delete multiple emails by UIDs in one batch (50-100x faster than one-by-one).
     All UIDs must be from the same folder. Moves to Trash or flags as Deleted.
@@ -788,7 +951,7 @@ async def delete_emails_bulk(
     imap = get_imap(account)
     imap.connect()
     try:
-        result = imap.delete_emails_bulk(uids, folder)
+        result = imap.delete_emails_bulk(uids, folder, permanent=permanent)
     finally:
         imap.disconnect()
 
@@ -809,7 +972,10 @@ async def search_and_delete_emails(
         "'FROM \"@darty.com\"' — by domain, "
         "'OR (OR FROM \"a@x.com\" FROM \"b@x.com\") FROM \"c@y.com\"' — 3+ senders"
     ))],
-    max_delete: Annotated[int, Field(description="Maximum emails to delete per call (safety limit, default 1000)")] = 1000,
+    permanent: Annotated[bool, Field(description="Purge instead of moving to Trash. Irreversible — only when the user asked for it.")] = False,
+    max_delete: Annotated[int, Field(
+        description="Maximum emails to delete per call (hard safety limit, 1..1000)",
+        ge=1, le=1000)] = 1000,
 ) -> dict:
     """BEST tool for bulk cleanup. Searches directly in IMAP and deletes ALL matches in one call.
     Use this to delete newsletters, spam, promos, or any emails matching a pattern.
@@ -828,15 +994,15 @@ async def search_and_delete_emails(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder))
-        status, data = imap._conn.uid("SEARCH", None, imap_criteria)
+        imap._select(folder)
+        status, data = imap._conn.uid("SEARCH", None, _imap_criteria(imap_criteria, "imap_criteria"))
         if status != "OK" or not data[0]:
             return {"found": 0, "deleted": 0, "failed": 0}
         uids = data[0].decode().split()
         total_found = len(uids)
         # Apply safety limit
-        uids = uids[:max_delete]
-        result = imap.delete_emails_bulk(uids, folder)
+        uids = uids[:_check_cap(max_delete, "max_delete")]
+        result = imap.delete_emails_bulk(uids, folder, permanent=permanent)
         result["found"] = total_found
         result["limited_to"] = max_delete if total_found > max_delete else None
     finally:
@@ -860,7 +1026,9 @@ async def search_and_move_emails(
         "'FROM \"@darty.com\"' — by domain, "
         "'OR (OR FROM \"a@x.com\" FROM \"b@x.com\") FROM \"c@y.com\"' — 3+ senders"
     ))],
-    max_move: Annotated[int, Field(description="Maximum emails to move per call (safety limit, default 1000)")] = 1000,
+    max_move: Annotated[int, Field(
+        description="Maximum emails to move per call (hard safety limit, 1..1000)",
+        ge=1, le=1000)] = 1000,
 ) -> dict:
     """BEST tool for bulk organization. Searches directly in IMAP and moves ALL matches to target folder in one call.
     Use this to organize emails by sender, subject, or any pattern — much faster than list + move separately.
@@ -879,13 +1047,13 @@ async def search_and_move_emails(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder))
-        status, data = imap._conn.uid("SEARCH", None, imap_criteria)
+        imap._select(folder)
+        status, data = imap._conn.uid("SEARCH", None, _imap_criteria(imap_criteria, "imap_criteria"))
         if status != "OK" or not data[0]:
             return {"found": 0, "moved": 0, "failed": 0}
         uids = data[0].decode().split()
         total_found = len(uids)
-        uids = uids[:max_move]
+        uids = uids[:_check_cap(max_move, "max_move")]
         result = imap.move_emails_bulk(uids, folder, target_folder)
         result["found"] = total_found
         result["limited_to"] = max_move if total_found > max_move else None
@@ -893,6 +1061,7 @@ async def search_and_move_emails(
         imap.disconnect()
 
     await _es_delete_docs(user_id, account_id, folder, uids)
+    await _es_reindex_recent(account, target_folder, count=result.get("moved", 0))
 
     return result
 
@@ -931,6 +1100,7 @@ async def organize_emails(
 
     results = []
     all_es_deletes: list[tuple[str, list[str]]] = []  # (folder, uids) pairs
+    reindex_targets: dict[str, int] = {}
     try:
         from src.imap.manager import _imap_quote
         for rule in rules:
@@ -941,8 +1111,8 @@ async def organize_emails(
                 continue
 
             # Re-SELECT source folder each iteration (UIDs shift after EXPUNGE)
-            imap._conn.select(_imap_quote(folder))
-            status, data = imap._conn.uid("SEARCH", None, criteria)
+            imap._select(folder)
+            status, data = imap._conn.uid("SEARCH", None, _imap_criteria(criteria, "rule criteria"))
             if status != "OK" or not data[0]:
                 results.append({"criteria": criteria, "target_folder": target, "found": 0, "moved": 0, "failed": 0})
                 continue
@@ -957,12 +1127,15 @@ async def organize_emails(
             result["limited_to"] = max_per_rule if total_found > max_per_rule else None
             results.append(result)
             all_es_deletes.append((folder, uids))
+            reindex_targets[target] = reindex_targets.get(target, 0) + result.get("moved", 0)
     finally:
         imap.disconnect()
 
-    # ES cleanup for all moved emails
+    # ES cleanup for all moved emails, then reindex destinations
     for src_folder, uids in all_es_deletes:
         await _es_delete_docs(user_id, account_id, src_folder, uids)
+    for tgt, n in reindex_targets.items():
+        await _es_reindex_recent(account, tgt, count=n)
 
     total_moved = sum(r.get("moved", 0) for r in results)
     total_failed = sum(r.get("failed", 0) for r in results)
@@ -1024,8 +1197,9 @@ async def create_folder(
 async def delete_folder(
     account_id: Annotated[int, Field(description="Mail account ID")],
     folder_name: Annotated[str, Field(description="Full folder path to delete (use display name with accents). Delete deepest subfolders first.")],
+    force: Annotated[bool, Field(description="If True, empty the folder before deleting")] = False,
 ) -> dict:
-    """Delete an IMAP folder. The folder should be empty. Delete children before parents."""
+    """Delete an IMAP folder. If it contains emails and force=False, returns not_empty status with count. Use force=True to empty and delete."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
@@ -1037,10 +1211,34 @@ async def delete_folder(
     imap = get_imap(account)
     imap.connect()
     try:
+        from src.imap.manager import _imap_quote
+        conn = imap._conn
+        status, resp = conn.select(_imap_quote(folder_name))
+        if status != "OK":
+            # A failed SELECT leaves the connection in AUTH state, where CLOSE is
+            # illegal — the error would then name the wrong command.
+            raise ToolError(f"Folder '{folder_name}' not found")
+        msg_count = int(resp[0]) if resp and resp[0] else 0
+        conn.close()
+        if msg_count > 0 and not force:
+            return {"status": "not_empty", "folder": folder_name, "count": msg_count}
+        if msg_count > 0 and force:
+            imap._select(folder_name)
+            st, data = conn.uid("SEARCH", None, "ALL")
+            if st == "OK" and data[0]:
+                uids = data[0].decode().split()
+                for i in range(0, len(uids), 50):
+                    batch = ",".join(uids[i:i+50])
+                    conn.uid("STORE", batch, "+FLAGS", "(\\Deleted)")
+                conn.expunge()
+            conn.close()
         ok = imap.delete_folder(folder_name)
-        return {"status": "deleted" if ok else "failed", "folder": folder_name}
     finally:
         imap.disconnect()
+
+    if ok:
+        await _es_delete_folder_docs(user_id, account_id, folder_name)
+    return {"status": "deleted" if ok else "failed", "folder": folder_name}
 
 
 @mcp.tool(tags={"action"})
@@ -1087,9 +1285,9 @@ async def mark_read(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder))
-        uid_set = ",".join(uids)
-        status, _ = imap._conn.uid("STORE", uid_set, "+FLAGS", "\\Seen")
+        imap._select(folder)
+        uid_set = ",".join(_check_uid_list(uids))
+        status, _ = imap._conn.uid("STORE", uid_set, "+FLAGS", "(\\Seen)")
         ok = status == "OK"
         return {"status": "ok" if ok else "failed", "count": len(uids)}
     finally:
@@ -1115,9 +1313,9 @@ async def mark_unread(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder))
-        uid_set = ",".join(uids)
-        status, _ = imap._conn.uid("STORE", uid_set, "-FLAGS", "\\Seen")
+        imap._select(folder)
+        uid_set = ",".join(_check_uid_list(uids))
+        status, _ = imap._conn.uid("STORE", uid_set, "-FLAGS", "(\\Seen)")
         ok = status == "OK"
         return {"status": "ok" if ok else "failed", "count": len(uids)}
     finally:
@@ -1179,9 +1377,13 @@ async def archive_email(
             imap.create_folder(archive_folder)
 
         result = imap.move_emails_bulk(uids, folder, archive_folder)
-        return {"status": "archived", "archive_folder": archive_folder, **result}
     finally:
         imap.disconnect()
+
+    await _es_delete_docs(user_id, account_id, folder, uids)
+    await _es_reindex_recent(account, archive_folder, count=result.get("moved", 0))
+
+    return {"status": "archived", "archive_folder": archive_folder, **result}
 
 
 @mcp.tool(tags={"read"})
@@ -1211,7 +1413,6 @@ async def count_unread(
             try:
                 status, data = imap._conn.status(_imap_quote(f), "(UNSEEN MESSAGES)")
                 if status == "OK" and data[0]:
-                    import re
                     m = re.search(rb'UNSEEN (\d+)', data[0])
                     t = re.search(rb'MESSAGES (\d+)', data[0])
                     unseen = int(m.group(1)) if m else 0
@@ -1245,10 +1446,10 @@ async def get_thread(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder), readonly=True)
+        imap._select(folder, readonly=True)
 
         # Fetch the target email's Message-ID, References, In-Reply-To, Subject
-        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID REFERENCES IN-REPLY-TO SUBJECT)])")
+        status, data = imap._conn.uid("FETCH", _check_uid(uid), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID REFERENCES IN-REPLY-TO SUBJECT)])")
         if status != "OK" or not data or data[0] is None:
             raise ToolError(f"Email UID {uid} not found")
 
@@ -1269,7 +1470,6 @@ async def get_thread(
             thread_ids.add(in_reply_to)
 
         # Search by subject (stripped of Re:/Fwd:) as fallback
-        import re
         base_subject = re.sub(r'^(Re|Fwd|Fw|Tr)\s*:\s*', '', subject, flags=re.IGNORECASE).strip()
 
         # Search for related emails by HEADER references or subject
@@ -1279,12 +1479,20 @@ async def get_thread(
         for mid in thread_ids:
             if not mid:
                 continue
-            clean = mid.strip("<>")
+            # Le Message-ID vient de l'en-tete d'un email : il est ecrit par l'expediteur.
+            # Le repliage RFC 5322 laisse passer un CRLF suivi d'une espace, et GreenMail
+            # execute une ligne de commande precedee d'une espace (Dovecot la refuse). Le
+            # vecteur est donc reel et dependant du serveur : on ne s'en remet pas au serveur.
             try:
-                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER Message-ID "<{clean}>"')
+                cible = _imap_astring(f'<{mid.strip("<>")}>', "message-id")
+            except ImapInjection:
+                logger.warning("Message-ID rejete (injection IMAP) : %r", mid)
+                continue
+            try:
+                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER Message-ID {cible}')
                 if status == "OK" and sdata[0]:
                     found_uids.update(sdata[0].decode().split())
-                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER References "<{clean}>"')
+                status, sdata = imap._conn.uid("SEARCH", None, f'HEADER References {cible}')
                 if status == "OK" and sdata[0]:
                     found_uids.update(sdata[0].decode().split())
             except Exception:
@@ -1294,7 +1502,7 @@ async def get_thread(
         if base_subject and len(found_uids) < 3:
             try:
                 safe_subj = base_subject[:60].replace('"', '')
-                status, sdata = imap._conn.uid("SEARCH", None, f'SUBJECT "{safe_subj}"')
+                status, sdata = imap._conn.uid("SEARCH", None, f'SUBJECT {_imap_astring(safe_subj, "subject")}')
                 if status == "OK" and sdata[0]:
                     found_uids.update(sdata[0].decode().split())
             except Exception:
@@ -1338,8 +1546,8 @@ async def get_email_headers(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder), readonly=True)
-        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
+        imap._select(folder, readonly=True)
+        status, data = imap._conn.uid("FETCH", _check_uid(uid), "(BODY.PEEK[HEADER])")
         if status != "OK" or not data or data[0] is None:
             raise ToolError(f"Email UID {uid} not found")
 
@@ -1383,13 +1591,13 @@ async def search_cross_folder(
 
         search_parts = []
         if from_addr:
-            search_parts.append(f'FROM "{from_addr}"')
+            search_parts.append(f'FROM {_imap_astring(from_addr, "from_addr")}')
         if to_addr:
-            search_parts.append(f'TO "{to_addr}"')
+            search_parts.append(f'TO {_imap_astring(to_addr, "to_addr")}')
         if subject:
-            search_parts.append(f'SUBJECT "{subject}"')
+            search_parts.append(f'SUBJECT {_imap_astring(subject, "subject")}')
         if text:
-            search_parts.append(f'TEXT "{text}"')
+            search_parts.append(f'TEXT {_imap_astring(text, "text")}')
         if date_from:
             from datetime import datetime
             d = datetime.strptime(date_from, "%Y-%m-%d")
@@ -1403,11 +1611,6 @@ async def search_cross_folder(
             return {"error": "At least one search filter is required"}
 
         criteria = ' '.join(search_parts)
-        charset = None
-        try:
-            criteria.encode('ascii')
-        except UnicodeEncodeError:
-            charset = 'UTF-8'
 
         results = {}
         grand_total = 0
@@ -1415,8 +1618,8 @@ async def search_cross_folder(
         for f_info in folders:
             fname = f_info["name"]
             try:
-                imap._conn.select(_imap_quote(fname), readonly=True)
-                status, data = imap._conn.uid("SEARCH", charset, criteria)
+                imap._select(fname, readonly=True)
+                status, data = _uid_search(imap._conn, criteria)
                 found = data[0].decode().split() if status == "OK" and data[0] else []
                 if not found:
                     continue
@@ -1429,12 +1632,13 @@ async def search_cross_folder(
                         ctx = imap.fetch_email(u, fname)
                         if ctx:
                             emails.append({
+                                "account_id": account_id, "folder": fname,
                                 "uid": ctx.uid, "from": ctx.from_addr,
                                 "subject": ctx.subject, "date": ctx.date,
                             })
                     except Exception:
                         pass
-                results[fname] = {"total_in_folder": len(found), "emails": emails}
+                results[fname] = {"account_id": account_id, "total_in_folder": len(found), "emails": emails}
             except Exception:
                 pass
 
@@ -1517,8 +1721,8 @@ async def delete_draft(
                 draft_folder = d
                 break
 
-        imap._conn.select(_imap_quote(draft_folder))
-        status, _ = imap._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+        imap._select(draft_folder)
+        status, _ = imap._conn.uid("STORE", _check_uid(uid), "+FLAGS", "(\\Deleted)")
         if status == "OK":
             imap._conn.expunge()
             return {"status": "deleted", "uid": uid}
@@ -1545,8 +1749,10 @@ async def update_draft(
 
     msg = MIMEMultipart()
     msg["From"] = account.smtp_user or account.imap_user
+    to = _check_recipients("to", to)
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)  # without it list_drafts reports an empty date
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     imap = get_imap(account)
@@ -1562,9 +1768,16 @@ async def update_draft(
                 draft_folder = d
                 break
 
-        # Delete old draft
-        imap._conn.select(_imap_quote(draft_folder))
-        imap._conn.uid("STORE", old_uid, "+FLAGS", "\\Deleted")
+        # Delete the old draft first — saving the new one while the old survives
+        # would leave the user with two drafts. A STORE on an unknown UID is a
+        # no-op success in IMAP, so check the UID exists before touching anything.
+        imap._select(draft_folder)
+        status, found = imap._conn.uid("SEARCH", None, f"UID {_check_uid(old_uid, 'old_uid')}")
+        if status != "OK" or not (found and found[0].split()):
+            return {"status": "failed", "detail": f"Draft {old_uid} not found in {draft_folder}"}
+        status, _ = imap._conn.uid("STORE", _check_uid(old_uid, "old_uid"), "+FLAGS", "(\\Deleted)")
+        if status != "OK":
+            return {"status": "failed", "detail": f"Could not delete draft {old_uid}"}
         imap._conn.expunge()
 
         # Save new draft
@@ -1595,7 +1808,7 @@ async def email_analytics(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder), readonly=True)
+        imap._select(folder, readonly=True)
 
         search_parts = []
         if date_from:
@@ -1687,7 +1900,6 @@ async def validate_email_address(
     email_address: Annotated[str, Field(description="Email address to validate")],
 ) -> dict:
     """Validate an email address format and check if the domain has MX records."""
-    import re
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     format_ok = bool(re.match(pattern, email_address))
 
@@ -1762,8 +1974,8 @@ async def spam_analysis(
     imap.connect()
     try:
         from src.imap.manager import _imap_quote
-        imap._conn.select(_imap_quote(folder), readonly=True)
-        status, data = imap._conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
+        imap._select(folder, readonly=True)
+        status, data = imap._conn.uid("FETCH", _check_uid(uid), "(BODY.PEEK[HEADER])")
         if status != "OK" or not data or data[0] is None:
             raise ToolError(f"Email UID {uid} not found")
 
@@ -1840,7 +2052,7 @@ async def scan_for_spam(
         from src.imap.manager import _imap_quote
         import email as email_mod
 
-        imap._conn.select(_imap_quote(folder), readonly=True)
+        imap._select(folder, readonly=True)
         status, data = imap._conn.uid("SEARCH", None, "ALL")
         all_uids = data[0].decode().split() if status == "OK" and data[0] else []
         scan_uids = all_uids[-limit:] if len(all_uids) > limit else all_uids
@@ -1885,7 +2097,7 @@ async def scan_for_spam(
                 elif "dkim=fail" in auth_results:
                     reasons.append("DKIM fail")
                 elif not has_dkim:
-                    reasons.append("No DKIM signature")
+                    reasons.append(_NO_DKIM)
 
                 # DMARC check
                 if "dmarc=pass" in auth_results:
@@ -1912,7 +2124,10 @@ async def scan_for_spam(
                     except ValueError:
                         pass
 
-                if not reasons:
+                # "No DKIM signature" is an absence of proof, already paid for by the
+                # missing DKIM point. Counting it as a red flag too made this tool
+                # disagree with spam_analysis on the very same message.
+                if not [r for r in reasons if r != _NO_DKIM]:
                     trust += 1
 
                 if trust < 3 or reasons:
@@ -1930,7 +2145,7 @@ async def scan_for_spam(
                 pass
 
         # Sort by trust score ascending (most suspicious first)
-        suspicious.sort(key=lambda x: x["trust_score"])
+        suspicious.sort(key=lambda x: int(str(x["trust_score"]).split("/")[0]))
 
         return {
             "folder": folder,
@@ -1949,7 +2164,7 @@ async def extract_calendar_events(
     folder: Annotated[str, Field(description="Folder name")],
     uid: Annotated[str, Field(description="Email UID")],
 ) -> dict:
-    """Extract calendar events (ICS/iCalendar) from email attachments or body."""
+    """Extract calendar events from an email's iCalendar parts (text/calendar, .ics attachments)."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account
 
@@ -2028,7 +2243,6 @@ async def contact_from_email(
         org = msg.get("Organization", "") or msg.get("X-Mailer", "")
 
         # Extract phone/url from signature (last lines of body)
-        import re
         body = ""
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
@@ -2041,7 +2255,12 @@ async def contact_from_email(
         lines = body.strip().split("\n")[-15:]
         sig_text = "\n".join(lines)
 
-        phones = re.findall(r'[\+]?[\d\s\-\.]{8,15}', sig_text)
+        # Require a word boundary and at least 9 digits, and reject ISO dates:
+        # the previous class matched "2026-09-15" and invoice references as phone numbers.
+        phones = [
+            p.strip() for p in re.findall(r'(?<![\w.-])(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{1,4}\)?[\s.-]?){2,6}\d{2,4}(?![\w-])', sig_text)
+            if _looks_like_phone(p)
+        ]
         urls = re.findall(r'https?://[^\s<>"]+', sig_text)
 
         contact = {
@@ -2061,16 +2280,59 @@ async def contact_from_email(
 # SEND EMAILS (SMTP)
 # ---------------------------------------------------------------------------
 
+_ADDR = re.compile(r"[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+")
+
+
+def _check_recipients(champ: str, valeurs) -> list[str]:
+    """The AI supplies these addresses; a malformed one must fail here, not at sendmail."""
+    propres = []
+    for v in valeurs or []:
+        a = str(v or "").strip()
+        if not a or any(c in a for c in "\r\n\0") or not _ADDR.fullmatch(a):
+            raise ToolError(f"Invalid address in {champ}: {v!r}")
+        propres.append(a)
+    if not propres:
+        raise ToolError(f"{champ}: at least one recipient is required")
+    return propres
+
+
+def _check_cap(valeur, nom: str, maxi: int = 1000) -> int:
+    """A cap the caller chooses is not a cap.
+
+    `uids[:max_delete]` with -1 deletes all but the last message, and a huge value
+    deletes everything while reporting `limited_to: null`. The Field bounds only guard
+    callers coming through the MCP protocol; anything invoking the function directly
+    bypasses them, so the check has to live here too.
+    """
+    try:
+        v = int(valeur)
+    except (TypeError, ValueError):
+        raise ToolError(f"{nom} must be an integer between 1 and {maxi}")
+    if not 1 <= v <= maxi:
+        raise ToolError(f"{nom}={valeur} is out of range — expected between 1 and {maxi}")
+    return v
+
+
+def _looks_like_phone(candidate: str) -> bool:
+    """Reject ISO dates and numeric references that the loose digit pattern also matches."""
+    digits = re.sub(r"\D", "", candidate)
+    if len(digits) < 9:
+        return False
+    if re.match(r"^\s*\d{4}-\d{2}-\d{2}\s*$", candidate):
+        return False  # ISO date
+    # Phone groups are short; "2024-000123" (invoice ref) has a 6-digit group
+    if "-" in candidate and any(len(g) >= 5 for g in candidate.split("-") if g.strip()):
+        return False
+    return True
+
+
 def _smtp_connect(account):
-    """Connect to SMTP server with proper SSL/STARTTLS handling."""
-    port = account.smtp_port or 465
-    use_implicit_ssl = port == 465 or (account.smtp_ssl and port != 587)
-    if use_implicit_ssl:
-        return smtplib.SMTP_SSL(account.smtp_host, port, timeout=30)
-    else:
-        server = smtplib.SMTP(account.smtp_host, port, timeout=30)
-        server.starttls(context=ssl_mod.create_default_context())
-        return server
+    """Connect to the account's SMTP server, honouring its smtp_ssl setting."""
+    from src.smtp_client import smtp_connect
+    return smtp_connect(
+        account.smtp_host, account.smtp_port or 465,
+        getattr(account, "smtp_ssl", True), timeout=30,
+    )
 
 @mcp.tool(tags={"send"})
 async def send_email(
@@ -2093,6 +2355,8 @@ async def send_email(
     if not account.smtp_host:
         raise ToolError("SMTP not configured for this account")
 
+    to = _check_recipients("to", to)
+    cc = _check_recipients("cc", cc) if cc else []
     msg = MIMEMultipart()
     msg["From"] = account.smtp_user or account.imap_user
     msg["To"] = ", ".join(to)
@@ -2158,17 +2422,27 @@ async def reply_to_email(
         msg["From"] = account.smtp_user or account.imap_user
         msg["To"] = ", ".join(to_addrs)
         msg["Subject"] = subject
-        msg["In-Reply-To"] = uid
+        # The IMAP UID means nothing outside the current folder — threading needs the
+        # original Message-ID, and References so the whole chain stays linked.
+        if original.message_id:
+            msg["In-Reply-To"] = original.message_id
+            msg["References"] = (
+                f"{original.references} {original.message_id}".strip()
+                if original.references else original.message_id
+            )
 
         full_body = f"{body}\n\n--- Original ---\nFrom: {original.from_addr}\nDate: {original.date}\n\n{original.body_text[:5000]}"
         msg.attach(MIMEText(full_body, "plain", "utf-8"))
 
         smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
 
-        server = _smtp_connect(account)
-        server.login(account.smtp_user or account.imap_user, smtp_password)
-        server.sendmail(msg["From"], to_addrs, msg.as_string())
-        server.quit()
+        try:
+            server = _smtp_connect(account)
+            server.login(account.smtp_user or account.imap_user, smtp_password)
+            server.sendmail(msg["From"], to_addrs, msg.as_string())
+            server.quit()
+        except Exception as e:
+            raise ToolError(f"SMTP error: {e}")
 
         imap.save_to_sent(msg.as_bytes())
         return {"status": "replied", "to": to_addrs, "subject": subject}
@@ -2208,6 +2482,7 @@ async def forward_email(
 
         msg = MIMEMultipart()
         msg["From"] = account.smtp_user or account.imap_user
+        to = _check_recipients("to", to)
         msg["To"] = ", ".join(to)
         msg["Subject"] = subject
 
@@ -2219,13 +2494,28 @@ async def forward_email(
 
         smtp_password = decrypt_value(account.smtp_password_encrypted) if account.smtp_password_encrypted else decrypt_value(account.imap_password_encrypted)
 
-        server = _smtp_connect(account)
-        server.login(account.smtp_user or account.imap_user, smtp_password)
-        server.sendmail(msg["From"], to, msg.as_string())
-        server.quit()
+        try:
+            server = _smtp_connect(account)
+            server.login(account.smtp_user or account.imap_user, smtp_password)
+            server.sendmail(msg["From"], to, msg.as_string())
+            server.quit()
+        except Exception as e:
+            raise ToolError(f"SMTP error: {e}")
 
         imap.save_to_sent(msg.as_bytes())
-        return {"status": "forwarded", "to": to, "subject": subject}
+        return {
+            "status": "forwarded",
+            "to": to,
+            "subject": subject,
+            "forwarded_email": {
+                "account_id": account_id,
+                "folder": folder,
+                "uid": uid,
+                "from": original.from_addr,
+                "subject": original.subject,
+                "date": original.date,
+            },
+        }
     finally:
         imap.disconnect()
 
@@ -2247,8 +2537,10 @@ async def save_draft(
 
     msg = MIMEMultipart()
     msg["From"] = account.smtp_user or account.imap_user
+    to = _check_recipients("to", to)
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)  # without it list_drafts reports an empty date
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     imap = get_imap(account)
@@ -2273,7 +2565,6 @@ async def summarize_email(
     """Summarize an email in a few sentences using AI."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account, get_user
-    from src.ai.router import get_llm_for_user
 
     folder = _normalize_folder(folder)
     user_id = _user_id()
@@ -2290,7 +2581,7 @@ async def summarize_email(
         finally:
             imap.disconnect()
 
-        llm = await get_llm_for_user(db, user)
+        llm = await _get_llm(db, user)
         summary = await llm.summarize(
             f"From: {ctx.from_addr}\nSubject: {ctx.subject}\nDate: {ctx.date}\n\n{ctx.body_text[:5000]}"
         )
@@ -2306,7 +2597,6 @@ async def summarize_thread(
     from src.mcp.context import get_db, get_es
     from src.mcp.helpers import get_user
     from src.search.indexer import search_emails as _search
-    from src.ai.router import get_llm_for_user
     from src.ai.base import AIMessage
 
     user_id = _user_id()
@@ -2331,7 +2621,7 @@ async def summarize_thread(
 
     async with get_db() as db:
         user = await get_user(db, user_id)
-        llm = await get_llm_for_user(db, user)
+        llm = await _get_llm(db, user)
         messages = [
             AIMessage("system", "Summarize this email thread concisely. Focus on key decisions, "
                       "action items, and important information. Reply in the same language as the emails."),
@@ -2351,7 +2641,6 @@ async def classify_email(
     """Classify an email into one of the given categories using AI."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account, get_user
-    from src.ai.router import get_llm_for_user
 
     folder = _normalize_folder(folder)
     user_id = _user_id()
@@ -2368,7 +2657,7 @@ async def classify_email(
         finally:
             imap.disconnect()
 
-        llm = await get_llm_for_user(db, user)
+        llm = await _get_llm(db, user)
         email_text = f"From: {ctx.from_addr}\nSubject: {ctx.subject}\n\n{ctx.body_text[:3000]}"
         category = await llm.classify(email_text, categories)
         return {"uid": uid, "category": category, "subject": ctx.subject}
@@ -2384,7 +2673,6 @@ async def extract_info(
     """Extract structured information from an email using AI (dates, amounts, names, etc.)."""
     from src.mcp.context import get_db, get_imap
     from src.mcp.helpers import get_account, get_user
-    from src.ai.router import get_llm_for_user
 
     folder = _normalize_folder(folder)
     user_id = _user_id()
@@ -2401,7 +2689,7 @@ async def extract_info(
         finally:
             imap.disconnect()
 
-        llm = await get_llm_for_user(db, user)
+        llm = await _get_llm(db, user)
         email_text = f"From: {ctx.from_addr}\nSubject: {ctx.subject}\nDate: {ctx.date}\n\n{ctx.body_text[:5000]}"
         extracted = await llm.extract_info(email_text, fields)
         return {"uid": uid, "subject": ctx.subject, "extracted": extracted}
@@ -2415,7 +2703,6 @@ async def ask_about_emails(
     from src.mcp.context import get_db, get_es
     from src.mcp.helpers import get_user
     from src.search.indexer import search_emails as _search
-    from src.ai.router import get_llm_for_user
     from src.ai.base import AIMessage
 
     user_id = _user_id()
@@ -2438,7 +2725,7 @@ async def ask_about_emails(
 
     async with get_db() as db:
         user = await get_user(db, user_id)
-        llm = await get_llm_for_user(db, user)
+        llm = await _get_llm(db, user)
         messages = [
             AIMessage("system",
                       "You are MailIA, an AI email assistant. Answer the user's question based on "
@@ -2566,14 +2853,30 @@ async def trigger_sync(
     account_id: Annotated[int | None, Field(description="Account ID to sync (all if not specified)")] = None,
 ) -> dict:
     """Trigger an immediate email sync via Celery worker. Does NOT block — sync runs in background."""
-    from src.worker.tasks import sync_account, sync_all_accounts
+    from src.mcp.context import get_db
+    from src.mcp.helpers import get_account, list_user_accounts
+    from src.worker.app import worker_online
+    from src.worker.tasks import sync_account
 
-    if account_id:
-        sync_account.delay(account_id)
-        return {"status": "sync_queued", "account_id": account_id}
-    else:
-        sync_all_accounts.delay()
-        return {"status": "sync_all_queued"}
+    if not worker_online():
+        raise ToolError(
+            "No sync worker is running: the request was not queued because it would "
+            "never be executed."
+        )
+
+    # Never dispatch on an unverified id, and never call sync_all_accounts here: it
+    # covers every account of every user, which no single caller is entitled to trigger.
+    user_id = _user_id()
+    async with get_db() as db:
+        if account_id:
+            await get_account(db, user_id, account_id)
+            target_ids = [account_id]
+        else:
+            target_ids = [a.id for a in await list_user_accounts(db, user_id) if a.sync_enabled]
+
+    for aid in target_ids:
+        sync_account.delay(aid)
+    return {"status": "sync_queued", "account_ids": target_ids}
 
 
 # ---------------------------------------------------------------------------
@@ -2676,6 +2979,7 @@ async def get_processing_logs(
     from src.db.models import ProcessingLog
 
     user_id = _user_id()
+    await _assert_account(account_id)
     async with get_db() as db:
         query = select(ProcessingLog).where(ProcessingLog.user_id == user_id)
         if account_id:
@@ -2782,23 +3086,15 @@ async def read_local_email(
     email_id: Annotated[int, Field(description="Local email ID")],
 ) -> dict:
     """Read the full content of a local email: headers, body text/html."""
-    from sqlalchemy import select
     from src.mcp.context import get_db
-    from src.db.models import LocalEmail, LocalFolder, MailAccount
+    from src.mcp.helpers import get_local_email
 
     user_id = _user_id()
     async with get_db() as db:
-        email = (await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))).scalar_one_or_none()
-        if not email:
-            raise ToolError(f"Local email {email_id} not found")
-        folder = (await db.execute(select(LocalFolder).where(LocalFolder.id == email.folder_id))).scalar_one_or_none()
-        if not folder:
-            raise ToolError("Folder not found")
-        account = (await db.execute(
-            select(MailAccount).where(MailAccount.id == folder.account_id, MailAccount.user_id == user_id)
-        )).scalar_one_or_none()
-        if not account:
-            raise ToolError("Access denied")
+        try:
+            email, folder = await get_local_email(db, user_id, email_id)
+        except ValueError as e:
+            raise ToolError(str(e))
 
         return {
             "id": email.id, "folder": folder.path,
@@ -2852,6 +3148,7 @@ async def create_local_folder(
     from src.mcp.helpers import get_account
     from src.db.models import LocalFolder
 
+    _check_target(path, "path")
     user_id = _user_id()
     async with get_db() as db:
         await get_account(db, user_id, account_id)
@@ -2939,15 +3236,16 @@ async def move_local_email(
     """Move a local email to another local folder."""
     from sqlalchemy import select
     from src.mcp.context import get_db
-    from src.mcp.helpers import get_account
+    from src.mcp.helpers import get_account, get_local_email
     from src.db.models import LocalFolder, LocalEmail, MailAccount
 
     user_id = _user_id()
     async with get_db() as db:
         await get_account(db, user_id, account_id)
-        email = (await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))).scalar_one_or_none()
-        if not email:
-            raise ToolError(f"Email {email_id} not found")
+        try:
+            email, _src_folder = await get_local_email(db, user_id, email_id)
+        except ValueError as e:
+            raise ToolError(str(e))
 
         target = (await db.execute(
             select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == target_folder_path)
@@ -2995,7 +3293,7 @@ async def find_duplicates_local_vs_imap(
             for f in folders:
                 fname = f["name"]
                 try:
-                    imap._conn.select(f'"{fname}"')
+                    imap._select(fname)
                     status, data = imap._conn.search(None, "ALL")
                     if status != "OK" or not data[0]:
                         folder_scan[fname] = 0
@@ -3107,7 +3405,7 @@ async def find_duplicates_imap_vs_local(
         for f in folders:
             fname = f["name"]
             try:
-                imap._conn.select(f'"{fname}"')
+                imap._select(fname)
                 status, data = imap._conn.search(None, "ALL")
                 if status != "OK" or not data[0]:
                     continue
@@ -3181,14 +3479,21 @@ async def copy_local_to_imap(
     imap = get_imap(account)
     imap.connect()
     try:
-        from src.imap.manager import _encode_imap_utf7
-        encoded = _encode_imap_utf7(imap_folder)
+        from src.imap.manager import _encode_imap_utf7, _imap_quote
+        # A blank name would APPEND into "" — the server reports success, the mail is
+        # discarded, and with delete_after the local originals would then be deleted.
+        _check_target(imap_folder, "imap_folder")
+        encoded = _imap_quote(_encode_imap_utf7(imap_folder))
+        # SELECT on a missing mailbox returns NO without raising, so test the
+        # status: relying on an exception never created the folder
         try:
-            imap._conn.select(f'"{encoded}"')
+            st, _ = imap._conn.select(encoded)
         except Exception:
-            imap._conn.create(f'"{encoded}"')
-            imap._conn.subscribe(f'"{encoded}"')
-            imap._conn.select(f'"{encoded}"')
+            st = "NO"
+        if st != "OK":
+            imap._conn.create(encoded)
+            imap._conn.subscribe(encoded)
+            imap._conn.select(encoded)
 
         # Fetch existing IMAP message-ids for dedup
         existing = set()
@@ -3220,7 +3525,7 @@ async def copy_local_to_imap(
                 if em.date:
                     imap_date = imaplib.Time2Internaldate(em.date.timestamp())
                 flags = "\\Seen" if em.seen else ""
-                st, _ = imap._conn.append(f'"{encoded}"', flags, imap_date, em.raw_message)
+                st, _ = imap._conn.append(encoded, flags, imap_date, em.raw_message)
                 if st == "OK":
                     uploaded += 1
                     uploaded_ids.append(em.id)

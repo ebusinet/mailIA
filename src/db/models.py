@@ -27,6 +27,7 @@ class User(Base):
     mail_accounts = relationship("MailAccount", back_populates="user", cascade="all, delete-orphan")
     ai_providers = relationship("AIProvider", back_populates="user", cascade="all, delete-orphan")
     ai_rules = relationship("AIRule", back_populates="user", cascade="all, delete-orphan")
+    classic_rules = relationship("ClassicRule", back_populates="user", cascade="all, delete-orphan")
     contacts = relationship("Contact", back_populates="user", cascade="all, delete-orphan")
     contact_groups = relationship("ContactGroup", back_populates="user", cascade="all, delete-orphan")
     signatures = relationship("EmailSignature", back_populates="user", cascade="all, delete-orphan")
@@ -92,6 +93,24 @@ class AIRule(Base):
 
     user = relationship("User", back_populates="ai_rules")
     ai_provider = relationship("AIProvider")
+
+
+class ClassicRule(Base):
+    __tablename__ = "classic_rules"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    priority = Column(Integer, default=100)
+    is_active = Column(Boolean, default=True)
+    match_mode = Column(String(10), default="all")  # "all" (AND) or "any" (OR)
+    stop_processing = Column(Boolean, default=False)
+    conditions = Column(JSON, nullable=False, default=list)
+    actions = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="classic_rules")
 
 
 class SystemSetting(Base):
@@ -188,6 +207,24 @@ class ContactGroup(Base):
     user = relationship("User", back_populates="contact_groups")
     contacts = relationship("Contact", secondary=contact_group_members, back_populates="groups")
     signature = relationship("EmailSignature", foreign_keys=[signature_id])
+
+
+class SpamWhitelist(Base):
+    __tablename__ = "spam_whitelist"
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("mail_accounts.id", ondelete="CASCADE"), nullable=False)
+    entry_type = Column(String, nullable=False)  # "email" or "domain"
+    value = Column(String, nullable=False)  # email address or domain
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class SpamBlacklist(Base):
+    __tablename__ = "spam_blacklist"
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("mail_accounts.id", ondelete="CASCADE"), nullable=False)
+    entry_type = Column(String, nullable=False)  # "email" or "domain"
+    value = Column(String, nullable=False)  # email address or domain
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class LocalEmail(Base):

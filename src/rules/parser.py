@@ -40,6 +40,7 @@ class ParsedRule:
     actions: list[RuleAction] = field(default_factory=list)
     notify: bool = False
     notify_summary: bool = False
+    unknown_actions: list[str] = field(default_factory=list)
 
 
 def parse_rules_markdown(markdown: str) -> list[ParsedRule]:
@@ -79,7 +80,7 @@ def parse_rules_markdown(markdown: str) -> list[ParsedRule]:
 
 def _build_rule(name: str, sections: dict[str, str]) -> ParsedRule:
     condition = _parse_condition(sections.get("si", sections.get("if", "")))
-    actions = _parse_actions(sections)
+    actions, unknown_actions = _parse_actions(sections)
     notify_raw = sections.get("notifier", sections.get("notify", "non")).lower()
     notify = notify_raw.startswith("oui") or notify_raw.startswith("yes")
     notify_summary = "resum" in notify_raw or "summary" in notify_raw
@@ -90,6 +91,7 @@ def _build_rule(name: str, sections: dict[str, str]) -> ParsedRule:
         actions=actions,
         notify=notify,
         notify_summary=notify_summary,
+        unknown_actions=unknown_actions,
     )
 
 
@@ -129,26 +131,47 @@ def _parse_condition(text: str) -> RuleCondition:
     return condition
 
 
-def _parse_actions(sections: dict[str, str]) -> list[RuleAction]:
+def _parse_actions(sections: dict[str, str]) -> tuple[list[RuleAction], list[str]]:
+    """Return the parsed actions plus the action lines that could not be understood."""
     actions = []
+    unknown = []
 
     for key in ["alors", "then", "et", "and", "action"]:
         text = sections.get(key, "")
         if not text:
             continue
 
-        for line in text.split("\n"):
-            line_lower = line.lower().strip()
+        # splitlines() et non split("\n") : le retour chariot seul est aussi une fin de
+        # ligne. Sans ca, "flag as x)\rA042 CREATE ..." produisait une cible contenant un CR,
+        # qui partait telle quelle dans une commande IMAP.
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line_lower = line.lower()
 
             if "deplacer" in line_lower or "move" in line_lower:
-                folder = re.search(r"(?:vers|to)\s+(.+)", line_lower)
+                # Match on the lowercased line but capture from the original:
+                # IMAP folder names are case-sensitive
+                folder = re.search(r"(?:vers|to)\s+(.+)", line, re.IGNORECASE)
                 if folder:
                     actions.append(RuleAction("move", folder.group(1).strip()))
+                else:
+                    # Sans cible, la ligne disparaissait sans trace : la regle etait comptee
+                    # valide et ne faisait rien.
+                    unknown.append(line)
+
+            elif "transferer" in line_lower or "forward" in line_lower:
+                addr = re.search(r"(?:a|vers|to)\s+(\S+@\S+)", line, re.IGNORECASE)
+                if addr:
+                    actions.append(RuleAction("forward", addr.group(1).strip()))
+                else:
+                    unknown.append(line)
 
             elif "marquer comme lu" in line_lower or "mark as read" in line_lower:
                 actions.append(RuleAction("mark_read"))
 
-            elif "marquer comme important" in line_lower or "mark as important" in line_lower:
+            elif "important" in line_lower:
                 actions.append(RuleAction("flag", "important"))
 
             elif "flag" in line_lower:
@@ -156,6 +179,21 @@ def _parse_actions(sections: dict[str, str]) -> list[RuleAction]:
                 actions.append(RuleAction("flag", flag.group(1).strip() if flag else "flagged"))
 
             elif "extraire" in line_lower or "extract" in line_lower:
-                actions.append(RuleAction("extract", line.strip()))
+                actions.append(RuleAction("extract", line))
 
-    return actions
+            else:
+                unknown.append(line)
+
+    # Derniere barriere : une cible ne doit jamais transporter de caractere de controle,
+    # elle finit dans une commande IMAP (dossier ou drapeau).
+    clean = []
+    for a in actions:
+        if a.target and re.search(r"[\x00-\x1f\x7f]", a.target):
+            logger.warning("Rule action target rejected (control character): %r", a.target)
+            unknown.append(f"{a.action_type}: {a.target!r}")
+            continue
+        clean.append(a)
+
+    if unknown:
+        logger.warning(f"Unrecognized rule action lines: {unknown}")
+    return clean, unknown

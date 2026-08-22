@@ -9,6 +9,13 @@ from src.rules.engine import EmailContext
 
 logger = logging.getLogger(__name__)
 
+# Semantic search is declared but inert: nothing populates the `embedding` field at
+# indexing time. These two MUST stay consistent with the model used to encode queries —
+# all-MiniLM-L6-v2 outputs 384, and the mapping previously declared 768, so every kNN
+# query was rejected. Changing EMBEDDING_DIMS requires recreating existing indices.
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_DIMS = 384
+
 
 def _index_name(user_id: int) -> str:
     return f"mailia-{user_id}"
@@ -56,7 +63,7 @@ async def ensure_index(es: AsyncElasticsearch, user_id: int):
                     "attachment_content": {"type": "text", "analyzer": "email_analyzer"},
                     "embedding": {
                         "type": "dense_vector",
-                        "dims": 768,
+                        "dims": EMBEDDING_DIMS,
                         "index": True,
                         "similarity": "cosine",
                     },
