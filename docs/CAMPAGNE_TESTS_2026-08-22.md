@@ -645,6 +645,45 @@ C'est aussi la cause indirecte du blocage de trois mois de la synchronisation.
 
 ---
 
+## 8. Plan C exécuté — l'interface, testée dans un navigateur
+
+Les cinq plans précédents attaquaient l'API. Ce sixième a piloté Chrome sur l'interface réelle,
+en session `qa_bot`. Rapport complet : `campagne-2026-08-22/PLAN_C_INTERFACE_NAVIGATEUR.md`.
+
+**Une alerte antérieure est rectifiée.** La recherche globale renvoie bien la charge XSS brute
+dans son JSON — mais le rendu l'échappe : 0 alerte déclenchée, 0 `<img>`, 0 `onerror`, charge
+présente en texte littéral. **Non exploitable.** Une charge brute dans une réponse d'API n'est pas
+une XSS ; seul le rendu tranche, et seul un navigateur pouvait le dire.
+
+**Trois défauts que seule l'interface pouvait révéler :**
+
+| # | Défaut | Gravité |
+|---|---|---|
+| IT3-02 | Dashboard entièrement vide sans fournisseur IA — aucun mode dégradé pour les statistiques qui n'en ont pas besoin, message technique anglais, identifiant interne exposé | moyen |
+| IT3-03 | Page Statut : `/api/admin/status` met **19,2 s** et renvoie 52 Ko ; les cartes s'affichent vides pendant ce temps, sans indicateur — la page paraît cassée alors qu'elle charge | moyen |
+| IT3-04 | Compte professionnel indexé à **110 %** (49 894 documents Elasticsearch pour 45 331 messages) : ≈ 4 563 entrées orphelines, donc des résultats de recherche fantômes | à investiguer |
+
+IT3-04 n'a pas été creusé : le diagnostic exigerait de **lire** le compte professionnel.
+
+**Ce qui a été vérifié à l'écran** : envoi complet depuis l'interface (autocomplétion → éditeur →
+SMTP → réception), déplacement groupé **sans duplication** (3 messages exactement, 2 + 1), filtres
+de colonne côté serveur, les 9 thèmes, le raccourci `N`, et **zéro message de console** sur sept
+pages et une vingtaine d'actions.
+
+**Le cloisonnement tient sur quatre surfaces indépendantes** — sélecteur de comptes, page Comptes,
+page Contacts, et l'historique d'autocomplétion des destinataires. Cette dernière compte : elle se
+nourrit de l'historique d'envoi, et c'est typiquement par là qu'une fuite passe inaperçue. Aucune
+adresse `@ebusinet.fr` nulle part.
+
+Réserve : `qa_bot` est administrateur et voit donc légitimement les métadonnées du compte
+professionnel via la page Admin. Ce droit ne lui sert à rien d'autre — **le retirer est gratuit**.
+
+Enfin, le formulaire de connexion s'est présenté pré-rempli par le gestionnaire de mots de passe
+avec `contact@ebusinet.fr`. Il n'a pas été soumis, aucun mot de passe n'a été saisi ; la session a
+été ouverte par injection du jeton QA.
+
+---
+
 *Rapports détaillés disponibles dans le répertoire de travail de la session : rapports de test des
 trois itérations, rapports de correction des cinq lots, audit du frontend et du worker, audit de
 véracité de la documentation, revue de la suite de tests.*

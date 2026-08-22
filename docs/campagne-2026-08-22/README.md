@@ -23,6 +23,7 @@ parce qu'ils constituent la seule trace détaillée du raisonnement.
 | 11 | `AUDIT_DOCUMENTATION.md` | Audit de véracité de `FONCTIONNALITES.md` : 9 affirmations fausses, 8 inexactes. Le document a été corrigé en conséquence. |
 | 12 | `RAPPORT_SUITE_TESTS.md` | Construction de la suite de non-régression. Contient IT4-01, le bug de destruction d'email trouvé à la première exécution. |
 | 13 | `REVUE_SUITE_TESTS.md` | Revue critique du garde-fou de la suite par un second agent : 6 scénarios d'attaque, 6 refus, et 2 trous corrigés depuis. |
+| 14 | `PLAN_C_INTERFACE_NAVIGATEUR.md` | Plan C — l'interface pilotée dans Chrome. Rectifie l'alerte XSS (non exploitable : le rendu échappe), et trouve 3 défauts qu'aucun test d'API ne pouvait atteindre, dont la page Statut à 19,2 s et l'indexation à 110 % du compte professionnel. |
 
 ## Comment les lire
 
