@@ -272,6 +272,40 @@ les limites.
   l'interface et un dossier créé par l'assistant sous le même nom pourraient y être deux dossiers
   distincts. Ni prouvé, ni écarté.
 
+## Le défaut qui a failli être effacé par sa propre détection
+
+Le dernier défaut trouvé — la suppression qui détruit quand il n'y a pas de corbeille — mérite
+d'être raconté, parce que sa découverte a tenu à dix minutes.
+
+Trois tests étaient rouges. Le testeur les a analysés, a trouvé dans le code un repli documenté et
+intentionnel, a conclu par écrit que **ce n'était pas un défaut produit mais un test mal
+conditionné**, et s'apprêtait à « corriger » les tests en créant la corbeille manquante avant leur
+exécution. Le rouge aurait disparu, définitivement, sans que personne ne sache pourquoi il avait
+existé.
+
+Son diagnostic du raisonnement qui a lâché vaut mieux que le défaut lui-même :
+
+> J'ai cherché à **expliquer** le rouge plutôt qu'à le **valider**. Dès que j'ai eu une explication
+> plausible et bénigne, j'ai cessé de chercher. Un échec qu'on sait expliquer n'est pas un échec
+> qu'on a compris.
+
+La question qu'il n'a pas posée était la sienne, celle qu'il appliquait depuis deux jours : *ce que
+l'API répond correspond-il à ce qu'elle a fait ?* Elle répondait « supprimé » aussi bien pour un
+déplacement récupérable que pour une destruction définitive. **Un repli documenté n'est pas un repli
+honnête si la réponse ne le distingue pas.**
+
+Deux enseignements en découlent.
+
+**Le premier tient à la forme du test.** Ces tests surveillaient une conservation — *le total ne
+doit pas changer* — écrite pour attraper une duplication. Elle a attrapé une perte, que personne ne
+cherchait. Un test qui aurait guetté spécifiquement une duplication n'aurait rien vu. Surveiller un
+invariant attrape plus que chercher un symptôme.
+
+**Le second tient à qui regarde.** Le testeur avait toutes les informations et la bonne méthode ; il
+lui manquait seulement de ne pas être celui qui venait d'écrire l'explication. C'est la même raison
+qui a fait trouver quatre autres défauts pendant la campagne : la relecture par un tiers n'ajoute
+pas de compétence, elle retire l'attachement à une conclusion déjà formée.
+
 ## Un refus qui vaut d'être noté
 
 Pour rendre testable le chemin TLS, un mécanisme installait un certificat de test dans le conteneur
