@@ -460,40 +460,52 @@ ferme pas la course : **mesurée à 0/6 duplications sur un serveur et 6/6 sur l
 comme commande, pas comme transaction — chaque session garde sa vue jusqu'à la notification de
 suppression.
 
-### La fenêtre, bornée par la mesure après deux modèles faux
+### La fenêtre, bornée après quatre modèles dont trois faux
 
-Deux explications successives ont été proposées et écartées — « les commandes sont désalignées »,
-puis « la fenêtre est l'intervalle entre l'ouverture du dossier et l'opération ». Toutes deux
-étaient cohérentes et construites sur des données réelles ; c'est ce qui les rendait crédibles.
+Quatre explications successives ont été proposées pour ce même défaut. **Les trois premières étaient
+fausses**, et chacune était cohérente avec les données disponibles au moment où elle a été formulée
+— c'est ce qui les rendait crédibles, et trois d'entre elles ont été transmises avant d'être
+réfutées.
 
-La seconde a été réfutée par un essai direct : une session gardant son instantané **dix secondes**
-pendant qu'une autre déplace le message ne produit **aucune duplication**. Le serveur refuse
-correctement une opération sur un message déjà retiré par une autre session, sans avoir eu besoin
-de la notifier.
+| Modèle | Sort |
+|---|---|
+| Les commandes sont désalignées | réfuté |
+| La fenêtre est l'intervalle entre l'ouverture du dossier et l'opération | réfuté par un essai direct : une session gardant son instantané **dix secondes** ne duplique pas |
+| C'est l'espacement des requêtes qui protège (~200 ms) | réfuté : les envois sont espacés de **0,06 à 0,24 ms**, plus serré que la fenêtre |
+| **C'est la variance du préambule de chaque requête** | **mesuré** |
 
-La fenêtre a donc été bornée en décalant délibérément la seconde requête :
+**La fenêtre fait moins d'une milliseconde** — duplication en dessous de 0,5 ms, jamais au-delà
+de 1 ms.
 
-| Écart entre les deux opérations | 0 ms | 0,2 ms | 0,5 ms | 1 ms | 2 ms | 20 ms |
-|---|---|---|---|---|---|---|
-| Duplications | 5/5 | 5/5 | 5/5 | **0/5** | 0/5 | 0/5 |
+Et ce qui protège n'est ni l'espacement ni une marge, mais la **dispersion** introduite par le
+préambule de chaque requête — connexion, TLS, authentification, ouverture de session IMAP :
 
-> **La fenêtre fait moins d'une milliseconde** — c'est la durée de la commande elle-même.
+| Clients simultanés | Préambule médian | Écart-type | Écart minimal entre deux voisins |
+|---|---|---|---|
+| 6 | 12 ms | 5,0 ms | 2,06 ms |
+| 12 | 20 ms | 9,0 ms | 1,86 ms |
+| **24** | 35 ms | 18,1 ms | **0,93 ms** |
+| 48 | 65 ms | 35,1 ms | 1,00 ms |
 
-Contre un espacement naturel d'une dizaine de millisecondes entre deux requêtes voisines de l'API,
-soit une marge d'environ **un facteur dix**.
+**À 24 clients simultanés, l'écart minimal touche le bord exact de la fenêtre.** Aucune duplication
+n'a été observée sur une centaine de courses, mais la marge réelle est d'un **facteur deux à trois**,
+non de trente comme estimé d'abord.
 
-Le défaut n'est donc ni fermé ni ouvert : il est hors d'atteinte, mais d'un facteur beaucoup plus
-faible qu'estimé, et ce facteur est le coût du préambule — connexion, authentification, ouverture
-de session.
+Le point qui rend la situation tenable n'a été vu par personne avant d'être mesuré : **la protection
+s'auto-régule.** Plus il y a de clients, plus le préambule ralentit, ce qui ré-étale les requêtes.
+L'écart minimal ne s'effondre donc pas sous la charge — il plafonne autour d'une milliseconde.
 
-D'où le déclencheur, précis et vérifiable : **un pool de connexions supprime ce préambule et peut
-amener deux requêtes à moins d'une milliseconde l'une de l'autre.** Il rendrait la fenêtre
-atteignable et casserait au passage la sûreté de la réutilisation de sélection — deux risques, une
-seule cause, un seul avertissement dans le code.
-- Et déplacer un message inexistant répond « déplacé » — donc dans une course, **les deux clients
-  reçoivent un succès alors qu'un seul a agi**.
+Ce n'est pas une marge de sécurité. C'est un équilibre que personne n'a conçu.
 
-### Le contrôle qui a retourné un constat
+D'où la formulation exacte du risque, et de son déclencheur : **un pool de connexions ne diviserait
+pas la marge, il supprimerait la seule chose qui protège** — le préambule, donc sa variance. Le même
+changement casserait aussi la sûreté de la réutilisation de sélection.
+
+**Une réserve à connaître** : le moteur de synchronisation n'a pas ce préambule à chaque opération,
+contrairement à l'API. Ce chemin n'est donc **pas couvert** par la protection décrite ici, et il n'a
+pas pu être mesuré puisque le worker est arrêté.
+
+## Le contrôle qui a retourné un constat
 
 Trois scénarios échouaient douze fois sur douze. Cette régularité a servi d'alarme plutôt que de
 preuve : *une vraie course ne se déclenche presque jamais à tous les coups.*

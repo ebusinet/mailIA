@@ -186,15 +186,23 @@ class IMAPManager:
         # les UID etant propres a chaque boite. Qui ajoute un pool doit d'abord proteger
         # ce marqueur, ou retirer `reutiliser_selection`.
         #
-        # Un pool casse AUSSI la protection de fait sur les deplacements concurrents.
-        # Fenetre mesuree sur Dovecot : deux UID MOVE dupliquent le message s'ils partent
-        # a moins de ~0,5 ms l'un de l'autre, plus jamais au-dela de 1 ms — c'est la duree
-        # de la commande elle-meme, pas celle de l'instantane de session (une session qui
-        # garde sa vue 10 s ne duplique pas). Aujourd'hui l'API espace ses requetes d'une
-        # dizaine de millisecondes grace au preambule (TLS, HTTP, connexion et login IMAP) :
-        # une marge d'un facteur dix environ. Un pool supprime ce preambule et peut amener
-        # deux requetes a moins d'une milliseconde. Le verrou applicatif, ecarte aujourd'hui
-        # faute de cas atteignable, deviendrait alors necessaire.
+        # Un pool casse AUSSI la protection de fait sur les deplacements concurrents,
+        # et la marge est plus mince qu'il n'y parait. Mesures sur Dovecot :
+        #
+        #   fenetre de duplication : deux UID MOVE a moins de ~0,5 ms l'un de l'autre
+        #     dupliquent le message ; au-dela de 1 ms, jamais. C'est la duree de la
+        #     commande, pas celle de l'instantane de session — une session qui garde sa
+        #     vue 10 s ne duplique pas, le serveur refuse un UID deja expurge.
+        #   ce qui protege aujourd'hui : la VARIANCE du preambule par requete (connexion
+        #     IMAP + LOGIN + SELECT), ecart-type ~5 ms. Meme avec des requetes lancees
+        #     exactement en meme temps, les MOVE arrivent espaces de ~2 ms.
+        #   marge reelle : facteur 2 a 3, et elle plafonne vers 1 ms quand la concurrence
+        #     augmente (24 clients : 0,93 ms mesure) — le preambule ralentit sous charge,
+        #     ce qui reetale les requetes. On frole le bord sans le franchir.
+        #
+        # Un pool supprime ce preambule, donc sa variance, donc la seule protection.
+        # Le verrou applicatif, ecarte aujourd'hui faute de cas atteignable, deviendrait
+        # alors necessaire.
         self._selection: tuple[str, bool] | None = None
         self._capacites: set[str] = set()
 
