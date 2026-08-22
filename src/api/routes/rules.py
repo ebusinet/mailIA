@@ -724,7 +724,7 @@ async def apply_classic_rule(
         raise
     except Exception as e:
         logger.error(f"Apply rule {rule_id} error: {e}")
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise HTTPException(status_code=502, detail="Le serveur de messagerie a refuse l'operation.")
 
     return {"matched": len(matched_uids), "actions": actions_done}
 

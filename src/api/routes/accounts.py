@@ -1,5 +1,6 @@
 import imaplib
 import logging
+import re
 import time as _time_mod
 from datetime import timezone
 
@@ -15,22 +16,163 @@ from src.db.session import get_db
 from src.db.models import User, MailAccount, LocalFolder, LocalEmail, SpamWhitelist, SpamBlacklist
 from src.api.deps import get_current_user
 from src.security import encrypt_value
-from src.imap.manager import _imap_quote
+from src.imap.manager import (FolderNotSelectable, ImapInjection, InvalidFlag,
+                              InvalidFolderName, InvalidUid, _imap_astring, _imap_quote,
+                              _uid_search)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _require_folder_name(value: str) -> str:
-    """A blank folder name is never a legitimate request.
+def _require_header_text(champ: str, valeur: str) -> str:
+    """CR/LF in a header value is the classic header-injection vector.
 
-    IMAP servers do not reliably reject it: GreenMail answers OK to `COPY <uid> ""`
-    and silently discards the message, so the caller is told the move succeeded while
-    the mail is destroyed. No status check downstream can catch that — the value has
-    to be refused before any command is issued.
+    Python's email library happens to stop most of it today; that is the standard
+    library's doing, not ours, and it is not something to rely on.
+    """
+    if valeur and re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\r|\n", valeur):
+        raise HTTPException(
+            status_code=422,
+            detail=f"« {champ} » contient un caractere de controle interdit")
+    return valeur
+
+
+def _require_recipients(champ: str, valeurs: list[str]) -> list[str]:
+    """Recipient addresses are not validated anywhere else.
+
+    An empty or malformed address reaches sendmail() and produces a 502 that reads like
+    a server fault. CRLF is currently stopped by the standard library, not by us — that
+    is luck, not a control.
+    """
+    propres = []
+    for v in valeurs or []:
+        a = (v or "").strip()
+        if not a or any(c in a for c in "\r\n\0") or not re.fullmatch(r"[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+", a):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Adresse invalide dans « {champ} » : « {v} »")
+        propres.append(a)
+    return propres
+
+
+def _require_message_uid(uid: str, storage: str = "imap") -> str:
+    """One endpoint, one message.
+
+    `1:*` and `1,2,3` are valid IMAP sequence sets: forwarded to a route documented as
+    acting on a single message, they act on the whole folder — a single call emptied a
+    mailbox. Local ids are prefixed with L.
+    """
+    u = (uid or "").strip()
+    # UID 0 n'existe pas (RFC 3501 : les UID commencent a 1) et produirait une erreur
+    # IMAP brute plutot qu'un refus lisible.
+    # Longueur bornee : un entier de 20 chiffres deborde la colonne et remonte en 500
+    ok = re.fullmatch(r"L?[1-9]\d{0,11}", u) if storage == "local" else re.fullmatch(r"[1-9]\d{0,11}", u)
+    if not ok:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Identifiant de message invalide : « {uid} ». Un seul message est "
+                   "attendu ; les plages et ensembles IMAP (1:*, 1,2,3) sont refuses.",
+        )
+    return u
+
+
+def _require_query_folder(folder: str) -> str:
+    """Same rule as the body validator — a folder name is a folder name whatever the channel."""
+    try:
+        return _require_folder_name(folder)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+IMPORT_ROOTS = ("/data/imports",)
+
+
+def _require_server_path(path: str) -> str:
+    """Confine a caller-supplied server path to the import volume (A-15).
+
+    `os.path.isfile(path)` alone accepted `/etc/hostname`, `/proc/self/environ` and
+    `/data/imports/../../etc/hostname`. The resolution MUST come before the check:
+    comparing the raw string lets `..` walk out of the allowed root afterwards.
+    """
+    import os
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=422, detail="Le chemin est vide.")
+
+    resolved = os.path.realpath(path)
+    roots = [os.path.realpath(r) for r in IMPORT_ROOTS]
+    if not any(resolved == r or resolved.startswith(r + os.sep) for r in roots):
+        logger.warning("import-path refuse : %r resolu en %r, hors %s", path, resolved, roots)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Chemin interdit. Les imports sont limites a : {', '.join(IMPORT_ROOTS)}.",
+        )
+    if not os.path.isfile(resolved):
+        raise HTTPException(status_code=404, detail="Fichier introuvable dans le repertoire d'import.")
+    return resolved
+
+
+def _imap_http_error(e: Exception, action: str = "operation IMAP") -> HTTPException:
+    """Ne pas renvoyer le message brut du serveur IMAP au client (R-10).
+
+    « UID command error: BAD [...] » ou « command CLOSE illegal in state AUTH » decrivent
+    l'implementation du serveur, pas ce que l'appelant doit corriger. Le detail part dans
+    les logs, le client recoit un message exploitable.
+    """
+    logger.warning("%s en echec : %s: %s", action, type(e).__name__, e)
+    # Ne pas divulguer n'est pas la meme chose que ne rien dire : un dossier absent est une
+    # erreur de l'appelant, pas une panne serveur, et l'utilisateur peut la corriger seul.
+    if isinstance(e, FolderNotSelectable):
+        return HTTPException(
+            status_code=404,
+            detail="Dossier introuvable ou impossible a ouvrir sur le serveur de messagerie.",
+        )
+    if isinstance(e, (ImapInjection, InvalidFlag, InvalidFolderName, InvalidUid)):
+        return HTTPException(status_code=422, detail=str(e))
+    return HTTPException(
+        status_code=502,
+        detail="Le serveur de messagerie a refuse l'operation. Reessayez ; si le probleme "
+               "persiste, consultez les journaux du serveur.",
+    )
+
+
+def _require_folder_name(value: str) -> str:
+    """A folder name must name a folder — not the root of the hierarchy.
+
+    Two ways this destroyed data:
+      - `COPY <uid> ""` is answered OK by some servers, which then discard the message;
+      - `RENAME "." "X"` is answered OK and renames the *whole tree*: a name made only
+        of separators designates the hierarchy root, not a folder. `..` does it too, so
+        comparing against the separator string is not enough.
+
+    The separator is discovered per server (`.` on OVH, `/` elsewhere) and that discovery
+    can lie — OVH announces `/` while using `.`. Rather than depend on it, require at
+    least one significant character once blanks and BOTH usual separators are removed.
+    No legitimate folder name is made solely of dots and slashes.
     """
     if not isinstance(value, str) or not value.strip():
         raise ValueError("le nom de dossier ne peut pas etre vide")
+    if len(value) > 128:
+        raise ValueError("le nom de dossier depasse 128 caracteres")
+    # RFC 3501 : CR/LF permettraient d'injecter une commande IMAP, NUL casse le protocole
+    if re.search(r"[\x00-\x1f\x7f]", value):
+        raise ValueError("le nom de dossier contient un caractere de controle interdit")
+    # « * » et « % » sont les jokers de LIST : un dossier ainsi nomme rend l'arborescence ambigue
+    if any(c in value for c in "*%"):
+        raise ValueError("le nom de dossier ne peut pas contenir « * » ni « % »")
+    if not value.strip().strip("./ \t\r\n").strip():
+        raise ValueError(
+            f"« {value} » ne designe pas un dossier mais la racine de la hierarchie : "
+            "un nom compose uniquement de separateurs, de points ou de blancs est refuse"
+        )
+    # An empty or blank path segment makes the server invent a phantom \Noselect
+    # folder: "a..b" produced "a" (\Noselect) plus "a.b".
+    for segment in re.split(r"[./]", value.strip()):
+        if not segment.strip():
+            raise ValueError(
+                f"« {value} » contient un segment vide : chaque niveau du chemin doit "
+                "porter un nom"
+            )
     return value
 
 
@@ -447,7 +589,7 @@ async def list_folders_counts(
     try:
         folder_counts = await loop.run_in_executor(None, _fetch_counts)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     _folder_counts_cache[account_id] = (now, folder_counts)
     return {"counts": folder_counts}
@@ -666,7 +808,7 @@ async def spam_scan(
     try:
         scan_result = await loop.run_in_executor(None, _do_scan)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return scan_result
 
@@ -883,8 +1025,11 @@ async def create_folder(
                 raise HTTPException(status_code=400, detail="Failed to create folder")
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
     _folder_list_cache.pop(account_id, None)
     _folder_counts_cache.pop(account_id, None)
     return {"status": "created", "folder": req.folder_name}
@@ -938,8 +1083,14 @@ async def delete_folder(
 
             def _count_folder(conn, folder):
                 st, resp = conn.select(_imap_quote(folder), readonly=True)
+                if st != "OK":
+                    # A failed SELECT leaves the connection in AUTH state; CLOSE would
+                    # then fail with "illegal in state AUTH" and hide the real cause.
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Dossier introuvable : {folder}")
                 c = 0
-                if st == "OK" and resp and resp[0]:
+                if resp and resp[0]:
                     c = int(resp[0])
                 conn.close()
                 return c
@@ -999,8 +1150,11 @@ async def delete_folder(
                 raise HTTPException(status_code=400, detail="Failed to delete folder")
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
     _folder_list_cache.pop(account_id, None)
     _folder_counts_cache.pop(account_id, None)
     return {"status": "deleted", "folder": req.folder_name}
@@ -1043,8 +1197,11 @@ async def empty_folder(
             conn.expunge()
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
     _folder_list_cache.pop(account_id, None)
     _folder_counts_cache.pop(account_id, None)
     return {"status": "emptied", "deleted": len(uids)}
@@ -1084,8 +1241,11 @@ async def rename_folder(
                 raise HTTPException(status_code=400, detail="Failed to rename folder")
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
     _folder_list_cache.pop(account_id, None)
     _folder_counts_cache.pop(account_id, None)
     return {"status": "renamed", "old_name": req.old_name, "new_name": req.new_name}
@@ -1115,7 +1275,7 @@ async def list_folders_raw(
                 if isinstance(item, bytes):
                     raw_lines.append(item.decode("utf-8", errors="replace"))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {
         "account_id": account_id,
@@ -1146,6 +1306,7 @@ async def list_messages(
 ):
     """List messages in an IMAP or local folder — folder passed as query param to handle / in names."""
     account = await _get_account(account_id, user, db)
+    folder = _require_query_folder(folder)
 
     if storage == "local":
         from sqlalchemy import func as sa_func
@@ -1230,6 +1391,10 @@ async def list_messages(
         with IMAPManager(config) as imap:
             conn = imap._conn
             status, select_data = _select_folder(conn, folder, readonly=True)
+            if status != "OK":
+                # Sans ce controle, le SEARCH qui suit echouait en 502 generique : l'appelant
+                # ne pouvait pas distinguer un dossier absent d'une panne du serveur.
+                raise FolderNotSelectable(folder)
 
             # Get EXISTS count from SELECT response for validation
             exists_count = 0
@@ -1245,30 +1410,27 @@ async def list_messages(
                 raw = q.strip()
                 for match in _re.finditer(r'(from|subject):(\S+)', raw):
                     field = match.group(1).upper()
-                    val = match.group(2).replace('"', '\\"')
-                    search_parts.append(f'{field} "{val}"')
+                    search_parts.append(f'{field} {_imap_astring(match.group(2), field)}')
                     raw = raw.replace(match.group(0), '')
-                remainder = raw.strip().replace('"', '\\"')
+                remainder = raw.strip()
                 if remainder:
-                    search_parts.append(f'TEXT "{remainder}"')
+                    search_parts.append(f'TEXT {_imap_astring(remainder, "q")}')
 
+            # Ces valeurs etaient sures par effet de bord : retirer les guillemets
+            # laissait un eventuel saut de ligne enferme dans la chaine citee. Le jour
+            # ou un champ cesserait de les retirer, le site devenait injectable.
             if filter_from:
-                search_parts.append(f'FROM "{filter_from.replace(chr(34), "")}"')
+                search_parts.append(f'FROM {_imap_astring(filter_from, "filter_from")}')
             if filter_to:
-                search_parts.append(f'TO "{filter_to.replace(chr(34), "")}"')
+                search_parts.append(f'TO {_imap_astring(filter_to, "filter_to")}')
             if filter_subject:
-                search_parts.append(f'SUBJECT "{filter_subject.replace(chr(34), "")}"')
+                search_parts.append(f'SUBJECT {_imap_astring(filter_subject, "filter_subject")}')
             if filter_replied:
                 search_parts.append('ANSWERED')
 
             if search_parts:
                 criteria = ' '.join(search_parts)
-                charset = None
-                try:
-                    criteria.encode('ascii')
-                except UnicodeEncodeError:
-                    charset = 'UTF-8'
-                status, data = conn.uid("SEARCH", charset, criteria)
+                status, data = _uid_search(conn, criteria)
                 search_uids = set(data[0].decode().split()) if data[0] else set()
             else:
                 search_uids = None  # means "all"
@@ -1510,8 +1672,11 @@ async def list_messages(
 
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {
         "folder": folder,
@@ -1549,12 +1714,7 @@ async def search_multi_folders(
     )
 
     search_term = req.q.strip().replace('"', '\\"')
-    charset = None
-    criteria = f'TEXT "{search_term}"'
-    try:
-        search_term.encode('ascii')
-    except UnicodeEncodeError:
-        charset = 'UTF-8'
+    criteria = f'TEXT {_imap_astring(search_term, "q")}'
 
     from src.imap.manager import _decode_imap_utf7
     results = []
@@ -1568,7 +1728,7 @@ async def search_multi_folders(
                     status, _ = _select_folder(conn, folder, readonly=True)
                     if status != "OK":
                         continue
-                    status, data = conn.uid("SEARCH", charset, criteria)
+                    status, data = _uid_search(conn, criteria)
                     if status != "OK" or not data[0]:
                         continue
                     uids = data[0].decode().split()
@@ -1626,7 +1786,7 @@ async def search_multi_folders(
                 except Exception as e:
                     errors.append(f"{folder}: {e}")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     # Sort by date descending
     results.sort(key=lambda m: m.get("date", ""), reverse=True)
@@ -1644,6 +1804,8 @@ async def get_message(
 ):
     """Fetch full email content by UID — live from IMAP or local DB."""
     account = await _get_account(account_id, user, db)
+    uid = _require_message_uid(uid, storage)
+    folder = _require_query_folder(folder)
 
     if storage == "local":
         em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
@@ -1781,8 +1943,11 @@ async def get_message(
 
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     # Load whitelist and blacklist for spam analysis
     wl_result = await db.execute(
@@ -1857,6 +2022,13 @@ async def send_email(
 
     if not account.smtp_host:
         raise HTTPException(status_code=400, detail="Aucun serveur SMTP configure pour ce compte")
+
+    req.subject = _require_header_text("subject", req.subject)
+    req.to = _require_recipients("to", req.to)
+    req.cc = _require_recipients("cc", req.cc)
+    req.bcc = _require_recipients("bcc", req.bcc)
+    if not req.to:
+        raise HTTPException(status_code=422, detail="Au moins un destinataire est requis")
 
     from src.security import decrypt_value as _dec
     smtp_password = _dec(account.smtp_password_encrypted) if account.smtp_password_encrypted else _dec(account.imap_password_encrypted)
@@ -1953,8 +2125,11 @@ async def save_draft(
             raise HTTPException(status_code=502, detail="Impossible de sauvegarder le brouillon")
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {"status": "draft_saved"}
 
@@ -1971,14 +2146,21 @@ async def update_flags(
 ):
     """Add or remove a flag on an email."""
     account = await _get_account(account_id, user, db)
+    uid = _require_message_uid(uid, storage)
+    folder = _require_query_folder(folder)
 
     if storage == "local":
         em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
         flag_map = {"seen": "seen", "read": "seen", "flagged": "flagged", "important": "flagged", "answered": "answered"}
         attr = flag_map.get(req.flag.lower())
-        if attr:
-            setattr(em, attr, req.action == "add")
-            await db.commit()
+        if attr is None:
+            # Sans ce refus, un drapeau inconnu ne faisait rien et repondait "ok".
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown flag {req.flag!r}. Allowed: {', '.join(sorted(flag_map))}",
+            )
+        setattr(em, attr, req.action == "add")
+        await db.commit()
         return {"status": "ok", "flag": req.flag, "action": req.action}
 
     from src.imap.manager import IMAPManager, IMAPConfig
@@ -1997,8 +2179,11 @@ async def update_flags(
             raise HTTPException(status_code=502, detail="Flag operation failed")
     except HTTPException:
         raise
+    except (ImapInjection, InvalidFlag) as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {"status": "ok", "flag": req.flag, "action": req.action}
 
@@ -2016,6 +2201,8 @@ async def move_message(
 ):
     """Move an email to another folder (supports imap/local cross-moves)."""
     account = await _get_account(account_id, user, db)
+    uid = _require_message_uid(uid, storage)
+    folder = _require_query_folder(folder)
 
     if storage == "local" and target_storage == "local":
         target_folder_result = await db.execute(
@@ -2114,7 +2301,7 @@ async def move_message(
     except InvalidFolderName as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {"status": "moved", "target_folder": req.target_folder}
 
@@ -2130,6 +2317,8 @@ async def delete_message(
 ):
     """Delete an email (move to Trash or delete from local DB)."""
     account = await _get_account(account_id, user, db)
+    uid = _require_message_uid(uid, storage)
+    folder = _require_query_folder(folder)
 
     if storage == "local":
         em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
@@ -2150,8 +2339,11 @@ async def delete_message(
             raise HTTPException(status_code=502, detail="Delete failed")
     except HTTPException:
         raise
+    except ImapInjection as e:
+        # Erreur de l'appelant, pas du serveur : 422, et le motif est explicite.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return {"status": "deleted"}
 
@@ -2166,6 +2358,10 @@ async def delete_bulk(
 ):
     """Delete multiple emails in one batch (single IMAP connection)."""
     account = await _get_account(account_id, user, db)
+    if not req.uids:
+        raise HTTPException(status_code=422, detail="Aucun message a supprimer : la liste est vide.")
+    req.uids = [_require_message_uid(u, storage) for u in req.uids]
+    req.folder = _require_query_folder(req.folder)
 
     if storage == "local":
         deleted = 0
@@ -2192,7 +2388,7 @@ async def delete_bulk(
         with IMAPManager(config) as imap:
             result = imap.delete_emails_bulk(req.uids, req.folder)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     return result
 
@@ -2209,6 +2405,8 @@ async def download_attachment(
 ):
     """Download an attachment by index from an email."""
     account = await _get_account(account_id, user, db)
+    uid = _require_message_uid(uid, storage)
+    folder = _require_query_folder(folder)
 
     if storage == "local":
         em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
@@ -2246,7 +2444,7 @@ async def download_attachment(
         with IMAPManager(config) as imap:
             att = imap.get_attachment_data(uid, folder, index)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+        raise _imap_http_error(e)
 
     if not att:
         raise HTTPException(status_code=404, detail="Attachment not found")
@@ -2267,6 +2465,13 @@ class CreateLocalFolderRequest(BaseModel):
     parent_path: str | None = None
 
     _v = field_validator("name")(_require_folder_name)
+
+    @field_validator("parent_path")
+    @classmethod
+    def _v_parent(cls, v):
+        # Le parent echappait a la validation : « . » ou « .. » y etaient acceptes et
+        # se retrouvaient concatenes dans le chemin stocke.
+        return _require_folder_name(v) if v is not None and v != "" else v
 
 
 @router.post("/{account_id}/local-folders")
@@ -2372,8 +2577,7 @@ async def import_from_path(
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can import from server paths")
 
-    if not os.path.isfile(path):
-        raise HTTPException(status_code=400, detail=f"File not found: {path}")
+    path = _require_server_path(path)
 
     config = None
     if storage == "imap":
@@ -3224,7 +3428,9 @@ def _select_folder(conn, folder: str, readonly: bool = True):
         errors.append(f"unquoted: {e}")
 
     logger.error("All folder select strategies failed for %r: %s", folder, errors)
-    raise Exception(f"Cannot open folder '{folder}': {'; '.join(errors)}")
+    # Type precis, pas Exception nue : c'est ce qui permet a _imap_http_error de repondre
+    # 404 plutot que 502 sur un dossier absent.
+    raise FolderNotSelectable(f"Cannot open folder '{folder}': {'; '.join(errors)}")
 
 
 def _build_folder_tree(folders: list[dict]) -> list[dict]:
@@ -3612,7 +3818,7 @@ async def export_folder_zip(
                     fname = f"{date_str}_{_safe(frm)}_{_safe(subj, 60)}_U{uid}.eml"
                     raws.append((fname, raw))
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+            raise _imap_http_error(e)
 
     # Build zip in memory. For very large folders this loads everything at once.
     # Acceptable for folders up to ~10k emails; beyond that we'd stream.

@@ -141,7 +141,10 @@ def _parse_actions(sections: dict[str, str]) -> tuple[list[RuleAction], list[str
         if not text:
             continue
 
-        for line in text.split("\n"):
+        # splitlines() et non split("\n") : le retour chariot seul est aussi une fin de
+        # ligne. Sans ca, "flag as x)\rA042 CREATE ..." produisait une cible contenant un CR,
+        # qui partait telle quelle dans une commande IMAP.
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -153,6 +156,10 @@ def _parse_actions(sections: dict[str, str]) -> tuple[list[RuleAction], list[str
                 folder = re.search(r"(?:vers|to)\s+(.+)", line, re.IGNORECASE)
                 if folder:
                     actions.append(RuleAction("move", folder.group(1).strip()))
+                else:
+                    # Sans cible, la ligne disparaissait sans trace : la regle etait comptee
+                    # valide et ne faisait rien.
+                    unknown.append(line)
 
             elif "transferer" in line_lower or "forward" in line_lower:
                 addr = re.search(r"(?:a|vers|to)\s+(\S+@\S+)", line, re.IGNORECASE)
@@ -177,6 +184,16 @@ def _parse_actions(sections: dict[str, str]) -> tuple[list[RuleAction], list[str
             else:
                 unknown.append(line)
 
+    # Derniere barriere : une cible ne doit jamais transporter de caractere de controle,
+    # elle finit dans une commande IMAP (dossier ou drapeau).
+    clean = []
+    for a in actions:
+        if a.target and re.search(r"[\x00-\x1f\x7f]", a.target):
+            logger.warning("Rule action target rejected (control character): %r", a.target)
+            unknown.append(f"{a.action_type}: {a.target!r}")
+            continue
+        clean.append(a)
+
     if unknown:
         logger.warning(f"Unrecognized rule action lines: {unknown}")
-    return actions, unknown
+    return clean, unknown

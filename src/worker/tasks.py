@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from src.worker.app import app
 from src.db.models import MailAccount, AIRule, ClassicRule, ProcessingLog, User, SpamWhitelist, SpamBlacklist
-from src.imap.manager import IMAPManager, IMAPConfig, _decode_imap_utf7
+from src.imap.manager import IMAPManager, IMAPConfig, _check_uid, _decode_imap_utf7
 from src.search.indexer import get_es_client, ensure_index, index_email, bulk_index_emails
 from src.rules.parser import parse_rules_markdown
 from src.rules.engine import evaluate_rules, EmailContext, AIProviderTimeout
@@ -65,7 +65,7 @@ def _uid_still_present(imap, uid: str) -> bool:
     second would stall the folder forever. The folder is already selected by the fetch.
     """
     try:
-        status, data = imap._conn.uid("SEARCH", None, f"UID {uid}")
+        status, data = imap._conn.uid("SEARCH", None, f"UID {_check_uid(uid)}")
     except Exception:
         return True  # cannot tell — assume it is still there and retry next cycle
     return status == "OK" and bool(data and data[0].split())

@@ -26,9 +26,107 @@ class InvalidFolderName(ValueError):
     and discards the message, so no status check downstream can catch it."""
 
 
+class InvalidUid(ValueError):
+    """A UID that is not a plain number would be an RFC 3501 sequence set.
+
+    "1:*" and "1,2,3" are valid IMAP *sets*: passed to an endpoint documented as acting
+    on one message, they act on the whole folder. Anything meaning "one message" must
+    therefore refuse everything but digits.
+    """
+
+
+def _check_uid(uid, quoi: str = "uid") -> str:
+    u = str(uid).strip()
+    # RFC 3501 : les UID commencent a 1 ; "0" n'est pas un message
+    if not u.isdigit() or u.lstrip("0") == "" or u != u.lstrip("0"):
+        raise InvalidUid(
+            f"{quoi} '{uid}' is not a single message id — ranges and sets such as "
+            "'1:*' or '1,2,3' are refused here"
+        )
+    return u
+
+
+def _check_uid_list(uids, quoi: str = "uids") -> list[str]:
+    """Every element of a bulk list must itself be a single UID.
+
+    Guarding only the unitary entry points would leave the hole open: one range slipped
+    into a list reaches the very same IMAP command.
+    """
+    if not isinstance(uids, (list, tuple)) or not uids:
+        raise InvalidUid(f"{quoi}: a non-empty list of message ids is required")
+    return [_check_uid(u, quoi) for u in uids]
+
+
+class ImapInjection(ValueError):
+    """A value that would break out of the IMAP command it is embedded in."""
+
+
+class InvalidFlag(ValueError):
+    """A flag name outside the finite set of IMAP system flags.
+
+    Unlike a search criteria, which is free by design, flags are a closed set:
+    we allow what is valid instead of refusing what is dangerous."""
+
+
+def _imap_astring(value: str, quoi: str = "value") -> str:
+    """Quote a SEARCH *value* the way _imap_quote does for folder names.
+
+    `f'FROM "{value}"'` without escaping lets a value close the quote and start a new
+    command: a CRLF ends the line on the wire and what follows runs in the authenticated
+    session. Demonstrated with `rien@x.invalid"\r\nA042 CREATE temoin`.
+
+    CR/LF/NUL cannot appear in an IMAP quoted string at all, so they are refused rather
+    than escaped; the quote and the backslash are escaped.
+    """
+    v = "" if value is None else str(value)
+    if re.search(r"[\x00-\x1f\x7f]", v):
+        raise ImapInjection(f"{quoi} contains a control character (IMAP command injection)")
+    if len(v) > 512:
+        raise ImapInjection(f"{quoi} is too long ({len(v)} characters, 512 max)")
+    escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _imap_criteria(expr: str, quoi: str = "criteria") -> str:
+    """Guard a caller-supplied SEARCH *expression*.
+
+    An expression cannot be escaped — the caller writes its structure by design. All that
+    can be done is to refuse what turns one command into two, and to bound the length: a
+    very long criteria string (`"OR " * 400`) drops the GreenMail session outright.
+    """
+    v = "" if expr is None else str(expr)
+    if not v.strip():
+        raise ImapInjection(f"{quoi} is empty")
+    if re.search(r"[\x00-\x1f\x7f]", v):
+        raise ImapInjection(f"{quoi} contains a control character (IMAP command injection)")
+    if len(v) > 1024:
+        raise ImapInjection(f"{quoi} is too long ({len(v)} characters, 1024 max)")
+    if v.count('"') % 2:
+        raise ImapInjection(f"{quoi} has an unbalanced quote")
+    return v
+
+
 def _check_target(folder: str, quoi: str = "target folder") -> str:
+    """A folder name must name a folder, not the root of the hierarchy.
+
+    `COPY <uid> ""` is answered OK by some servers, which discard the message; and
+    `RENAME "." "X"` renames the whole tree — a name made only of separators designates
+    the root. `..` does it too, so comparing against the separator is not enough, and
+    the separator itself is server-dependent and sometimes misreported.
+    """
     if not isinstance(folder, str) or not folder.strip():
         raise InvalidFolderName(f"{quoi} is empty — refusing, this would destroy the message")
+    if re.search(r"[\x00-\x1f\x7f]", folder):
+        raise InvalidFolderName(f"{quoi} contains a control character (IMAP command injection)")
+    if any(c in folder for c in "*%"):
+        raise InvalidFolderName(f"{quoi} '{folder}' contains an IMAP wildcard (* or %)")
+    if not folder.strip().strip("./ \t\r\n").strip():
+        raise InvalidFolderName(
+            f"{quoi} '{folder}' designates the hierarchy root, not a folder — refusing"
+        )
+    for segment in re.split(r"[./]", folder.strip()):
+        if not segment.strip():
+            raise InvalidFolderName(f"{quoi} '{folder}' has an empty path segment")
     return folder
 
 
@@ -146,6 +244,7 @@ class IMAPManager:
 
     def fetch_email(self, uid: str, folder: str = "INBOX") -> EmailContext | None:
         """Fetch and parse a single email by UID. None if the folder or the UID is gone."""
+        _check_uid(uid)
         # An unchecked SELECT leaves the connection in AUTH state and the FETCH then
         # fails with the opaque "command FETCH illegal in state AUTH"
         sel_status, _ = self._conn.select(_imap_quote(folder), readonly=True)
@@ -211,6 +310,7 @@ class IMAPManager:
 
     def fetch_raw(self, uid: str, folder: str = "INBOX") -> bytes | None:
         """Fetch raw email bytes (for attachment extraction)."""
+        _check_uid(uid)
         self._select(folder, readonly=True)
         status, data = self._conn.uid("FETCH", uid, "(RFC822)")
         if status != "OK" or not data or data[0] is None:
@@ -280,6 +380,7 @@ class IMAPManager:
 
     def move_email(self, uid: str, from_folder: str, to_folder: str) -> bool:
         """Move an email to another folder via IMAP. Creates folder if needed."""
+        _check_uid(uid)
         _check_target(to_folder)
         if to_folder.strip() == (from_folder or "").strip():
             raise InvalidFolderName(f"source and target are the same folder ('{from_folder}')")
@@ -309,6 +410,7 @@ class IMAPManager:
         """Move multiple emails in one batch. Batch COPY by UID sets (50 per call), single EXPUNGE."""
         if not uids:
             return {"moved": 0, "failed": 0}
+        uids = _check_uid_list(uids)
         _check_target(to_folder)
         if to_folder.strip() == (from_folder or "").strip():
             raise InvalidFolderName(f"source and target are the same folder ('{from_folder}')")
@@ -353,6 +455,7 @@ class IMAPManager:
 
     def flag_email(self, uid: str, folder: str, flag: str) -> bool:
         """Add a flag to an email."""
+        _check_uid(uid)
         self._select(folder)
         imap_flag = _resolve_flag(flag)
         status, _ = self._conn.uid("STORE", uid, "+FLAGS", f"({imap_flag})")
@@ -363,6 +466,7 @@ class IMAPManager:
 
     def unflag_email(self, uid: str, folder: str, flag: str) -> bool:
         """Remove a flag from an email."""
+        _check_uid(uid)
         self._select(folder)
         imap_flag = _resolve_flag(flag)
         status, _ = self._conn.uid("STORE", uid, "-FLAGS", f"({imap_flag})")
@@ -373,18 +477,21 @@ class IMAPManager:
 
     def mark_read(self, uid: str, folder: str) -> bool:
         """Mark an email as read."""
+        _check_uid(uid)
         self._select(folder)
         status, _ = self._conn.uid("STORE", uid, "+FLAGS", "(\\Seen)")
         return status == "OK"
 
     def mark_unread(self, uid: str, folder: str) -> bool:
         """Mark an email as unread."""
+        _check_uid(uid)
         self._select(folder)
         status, _ = self._conn.uid("STORE", uid, "-FLAGS", "(\\Seen)")
         return status == "OK"
 
     def mark_processed(self, uid: str, folder: str) -> bool:
         """Add the MailIA processed flag."""
+        _check_uid(uid)
         self._select(folder)
         status, _ = self._conn.uid("STORE", uid, "+FLAGS", f"({PROCESSED_FLAG})")
         return status == "OK"
@@ -421,6 +528,7 @@ class IMAPManager:
 
     def delete_email(self, uid: str, folder: str) -> bool:
         """Delete an email (move to Trash, or flag as Deleted)."""
+        _check_uid(uid)
         trash_folder = self._find_trash_folder()
         if trash_folder and folder != trash_folder:
             return self.move_email(uid, folder, trash_folder)
@@ -436,6 +544,8 @@ class IMAPManager:
         """Delete multiple emails in one batch. Uses UID sets for efficiency."""
         if not uids:
             return {"deleted": 0, "failed": 0}
+
+        uids = _check_uid_list(uids)
 
         trash_folder = self._find_trash_folder()
 
@@ -554,6 +664,7 @@ class IMAPManager:
 
     def get_attachment_data(self, uid: str, folder: str, attachment_index: int) -> dict | None:
         """Get attachment data by index from an email."""
+        _check_uid(uid)
         raw = self.fetch_raw(uid, folder)
         if not raw:
             return None
@@ -580,8 +691,29 @@ class IMAPManager:
         return None
 
 
+def _uid_search(conn, criteria: str):
+    """UID SEARCH tolerant du non-ASCII. Deux defauts empiles corriges ici.
+
+    1. imaplib encode les arguments `str` en ASCII : un critere contenant « Ete »
+       levait UnicodeEncodeError avant meme d'atteindre le serveur.
+    2. `uid("SEARCH", "UTF-8", criteria)` n'emet PAS le mot-cle CHARSET, contrairement
+       a `imaplib.search()` qui l'insere. Le charset partait donc comme s'il etait une
+       cle de recherche. Il faut le passer explicitement.
+    """
+    try:
+        criteria.encode("ascii")
+    except UnicodeEncodeError:
+        return conn.uid("SEARCH", "CHARSET", "UTF-8", criteria.encode("utf-8"))
+    return conn.uid("SEARCH", None, criteria)
+
+
 def _resolve_flag(flag: str) -> str:
-    """Convert human-readable flag names to IMAP flags."""
+    """Convert human-readable flag names to IMAP flags.
+
+    Whitelist only: the set of IMAP system flags is finite, and the value ends up
+    inside STORE ... (<flag>) without escaping. Letting an unknown name through
+    verbatim lets it close the parenthesis and start a new command.
+    """
     mapping = {
         "important": "\\Flagged",
         "flagged": "\\Flagged",
@@ -589,8 +721,14 @@ def _resolve_flag(flag: str) -> str:
         "seen": "\\Seen",
         "answered": "\\Answered",
         "draft": "\\Draft",
+        "deleted": "\\Deleted",
     }
-    return mapping.get(flag.lower(), flag)
+    resolved = mapping.get(str(flag).lower().strip())
+    if resolved is None:
+        raise InvalidFlag(
+            f"Unknown flag {flag!r}. Allowed: {', '.join(sorted(mapping))}"
+        )
+    return resolved
 
 
 def _encode_imap_utf7(s: str) -> str:
