@@ -48,7 +48,7 @@ async def _worker_session():
         await engine.dispose()
 
 
-SYNC_LOCK_TTL = 2100  # must outlive task_time_limit (1800) so a SIGKILLed task still frees the lock
+SYNC_LOCK_TTL = 3300  # must outlive task_time_limit (3000) so a SIGKILLed task still frees the lock
 SYNC_TASK_EXPIRES = 240  # a dispatched sync not picked up before the next cycle is pointless
 MAX_AI_TIMEOUTS = 3  # consecutive provider timeouts before AI rules are dropped for the cycle
 
@@ -197,6 +197,11 @@ async def _sync_account(db, account: MailAccount):
             MAX_PER_FOLDER = 2000  # max emails per folder per sync cycle
 
             for entry in folder_entries:
+                # Un noeud \Noselect n'est pas une boite : le selectionner echoue a chaque
+                # cycle et journalise une erreur qui n'en est pas une. list_folders() expose
+                # deja le drapeau.
+                if isinstance(entry, dict) and "\\Noselect" in entry.get("flags", ""):
+                    continue
                 imap_folder = entry["name"] if isinstance(entry, dict) else entry
                 display_folder = entry.get("display_name", imap_folder) if isinstance(entry, dict) else imap_folder
                 folder = imap_folder  # Use IMAP UTF-7 name for IMAP operations
@@ -220,9 +225,15 @@ async def _sync_account(db, account: MailAccount):
                         cursor_uid = None
                         batch_complete = True
 
-                        for uid in batch_uids:
+                        # Le premier fetch du lot selectionne, les suivants reutilisent :
+                        # une seule ouverture de dossier par lot de 50 au lieu de 50.
+                        # Rien ne selectionne ailleurs pendant cette boucle — les regles,
+                        # qui peuvent deplacer, ne tournent qu'apres.
+                        for rang, uid in enumerate(batch_uids):
                             try:
-                                email_ctx = imap.fetch_email(uid, folder)
+                                email_ctx = imap.fetch_email(
+                                    uid, folder, reutiliser_selection=(rang > 0)
+                                )
                                 if email_ctx:
                                     email_ctx.folder = display_folder  # Store UTF-8 in ES
                                     batch_contexts.append(email_ctx)

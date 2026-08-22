@@ -14,8 +14,11 @@ app.conf.update(
     timezone="Europe/Paris",
     # A sync that hangs (slow IMAP, LLM call per email) must never hold a worker
     # slot forever — without these limits the pool silently stops syncing.
-    task_soft_time_limit=1500,  # 25 min: raises SoftTimeLimitExceeded
-    task_time_limit=1800,  # 30 min: hard kill of the worker process
+    # Measured, not guessed: a full catch-up on the real account is ~12.5 min once the
+    # redundant SELECT is gone. 2700 leaves 3.6x headroom for latency spikes and heavier
+    # messages; the hard limit adds 300s to unwind rather than to work.
+    task_soft_time_limit=2700,  # 45 min: raises SoftTimeLimitExceeded
+    task_time_limit=3000,  # 50 min: hard kill of the worker process
     beat_schedule={
         "sync-all-accounts": {
             "task": "src.worker.tasks.sync_all_accounts",

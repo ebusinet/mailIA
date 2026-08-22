@@ -169,6 +169,8 @@ class IMAPManager:
     def __init__(self, config: IMAPConfig):
         self.config = config
         self._conn: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
+        # (dossier, readonly) actuellement selectionne, ou None si inconnu.
+        self._selection: tuple[str, bool] | None = None
 
     def connect(self):
         if self.config.ssl:
@@ -182,6 +184,7 @@ class IMAPManager:
             import base64
             auth_string = f"\x00{self.config.user}\x00{self.config.password}"
             self._conn.authenticate("PLAIN", lambda _: auth_string.encode("utf-8"))
+        self._selection = None
         logger.info(f"Connected to {self.config.host} as {self.config.user}")
 
     def disconnect(self):
@@ -191,6 +194,7 @@ class IMAPManager:
             except Exception:
                 pass
             self._conn = None
+        self._selection = None
 
     def __enter__(self):
         self.connect()
@@ -229,7 +233,11 @@ class IMAPManager:
         """
         typ, data = self._conn.select(_imap_quote(folder), readonly=readonly)
         if typ != "OK":
+            self._selection = None
             raise FolderNotSelectable(f"Cannot open folder '{folder}' — check that it exists")
+        # Tout SELECT passe par ici : le marqueur reste donc exact quoi que fasse
+        # l'appelant, tant qu'il ne parle pas a `_conn` directement.
+        self._selection = (folder, readonly)
         return data
 
     def get_uids(self, folder: str = "INBOX", since_uid: str | None = None) -> list[str]:
@@ -251,15 +259,30 @@ class IMAPManager:
         # sync cursor to the last UID of a batch — an unsorted reply would skip mail
         return sorted(uids, key=int)
 
-    def fetch_email(self, uid: str, folder: str = "INBOX") -> EmailContext | None:
-        """Fetch and parse a single email by UID. None if the folder or the UID is gone."""
+    def fetch_email(self, uid: str, folder: str = "INBOX",
+                    reutiliser_selection: bool = False) -> EmailContext | None:
+        """Fetch and parse a single email by UID. None if the folder or the UID is gone.
+
+        `reutiliser_selection` fait sauter le SELECT quand le dossier est deja celui
+        ouvert : la boucle de synchronisation enchaine des centaines d'emails du meme
+        dossier, et un EXAMINE par email doublait le nombre d'allers-retours — donc le
+        temps de synchronisation sur un serveur distant, ou tout est latence.
+
+        La reutilisation est **explicite et jamais deduite** : un marqueur partage que
+        l'appelant ne declare pas serait faux des qu'un autre chemin selectionne
+        ailleurs, et un FETCH sur le mauvais dossier ne se voit pas — les UID sont
+        propres a chaque boite, un meme numero y designe un autre message.
+        """
         _check_uid(uid)
-        # An unchecked SELECT leaves the connection in AUTH state and the FETCH then
-        # fails with the opaque "command FETCH illegal in state AUTH"
-        sel_status, _ = self._conn.select(_imap_quote(folder), readonly=True)
-        if sel_status != "OK":
-            logger.warning(f"Cannot select folder {folder}")
-            return None
+        if not (reutiliser_selection and getattr(self, "_selection", None) == (folder, True)):
+            # An unchecked SELECT leaves the connection in AUTH state and the FETCH then
+            # fails with the opaque "command FETCH illegal in state AUTH"
+            sel_status, _ = self._conn.select(_imap_quote(folder), readonly=True)
+            if sel_status != "OK":
+                self._selection = None
+                logger.warning(f"Cannot select folder {folder}")
+                return None
+            self._selection = (folder, True)
         status, data = self._conn.uid("FETCH", uid, "(RFC822)")
         if status != "OK" or not data or data[0] is None:
             return None
@@ -594,19 +617,31 @@ class IMAPManager:
             )
 
         if trash_folder and folder != trash_folder and not permanent:
-            # Batch move to trash: SELECT once, COPY each, flag all, EXPUNGE once
+            # Batch move to trash by UID sets, like move_emails_bulk : supprimer EST un
+            # deplacement vers la corbeille, et un COPY par message coutait 1,02 aller-retour
+            # par email la ou le regroupement en coute 0,04 — 25 fois plus, pour le meme travail.
             self._select(folder)
             self._conn.create(_imap_quote(trash_folder))
             moved = []
             failed = 0
             copy_responses = []
-            for uid in uids:
-                status, data = self._conn.uid("COPY", uid, _imap_quote(trash_folder))
+            chunk_size = 50
+            for i in range(0, len(uids), chunk_size):
+                chunk = uids[i:i + chunk_size]
+                status, data = self._conn.uid("COPY", ",".join(chunk), _imap_quote(trash_folder))
                 if status == "OK":
-                    moved.append(uid)
+                    moved.extend(chunk)
                     copy_responses.append(data)
                 else:
-                    failed += 1
+                    # Repli message par message : un seul UID fautif ne doit pas faire
+                    # echouer les 49 autres du lot.
+                    for uid in chunk:
+                        status, data = self._conn.uid("COPY", uid, _imap_quote(trash_folder))
+                        if status == "OK":
+                            moved.append(uid)
+                            copy_responses.append(data)
+                        else:
+                            failed += 1
             if moved:
                 uid_set = ",".join(moved)
                 try:
