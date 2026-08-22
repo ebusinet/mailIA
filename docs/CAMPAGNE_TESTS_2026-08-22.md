@@ -518,6 +518,37 @@ C'est l'erreur symétrique de celle commise la veille, où un défaut du produit
 test. Même cause dans les deux sens : **conclure d'une observation sans le contrôle qui
 l'interprète.**
 
+---
+
+# Ce que la vérification croisée a produit, et qu'aucune rigueur individuelle n'aurait donné
+
+Le dernier défaut de la campagne a donné lieu à **quatre modèles successifs, dont trois faux**. Ils
+méritent d'être listés, parce qu'ils disent mieux que le décompte des défauts ce que cette méthode
+apporte.
+
+| Modèle | Fenêtre supposée | Ce qui l'a démoli |
+|---|---|---|
+| 1 — la commande n'est pas atomique | durée de la commande | la commande atomique du protocole duplique quand même |
+| 2 — intervalle entre l'ouverture du dossier et l'opération | ~6 ms | une session gardant son instantané **dix secondes** ne duplique pas |
+| 3 — les requêtes sont trop espacées | marge ×30 puis ×10 | les envois sont à 0,06 ms, **plus serrés que la fenêtre** |
+| 4 — la variance du préambule de chaque requête | **< 1 ms, marge ×2 à 3** | tient |
+
+Les trois faux étaient **cohérents et appuyés sur de vraies mesures**. C'est ce qui les rendait
+crédibles, et trois d'entre eux ont été transmis avant d'être réfutés.
+
+**Aucun n'est tombé grâce aux données de son auteur.** Le second par une question venue de l'autre
+intervenant, le troisième par une métrique que la mise en garde de l'autre avait fait ajouter, le
+premier par une mesure de l'autre. Chacun a été redressé par la règle du voisin.
+
+La conclusion des deux intervenants, formulée séparément et dans les mêmes termes :
+
+> Je n'ai jamais eu, dans mes propres mesures, de quoi me détromper.
+
+Ce n'est ni la prudence ni la compétence individuelle qui a corrigé ces modèles — c'est qu'une
+question extérieure soit venue heurter une explication qui, de l'intérieur, ne présentait aucune
+faille. C'est le résultat le plus transposable de ces trois jours, et il vaut plus que la liste des
+défauts qui précède.
+
 ## 7. Décisions qui vous appartiennent
 
 ### 7.0 L'angle mort qui grandit : le worker n'a jamais tourné

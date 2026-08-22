@@ -19,10 +19,11 @@ chevauchement prouve » n'est pas la meme information que « vert ».
 """
 from __future__ import annotations
 
+import json
 import uuid
 
-from ..core import (API, CFG, Skip, count_in, expect, messages_in, noter, premier,
-                    seed, test, work_folder)
+from ..core import (API, BOX, CFG, Skip, count_in, expect, messages_in, noter,
+                    premier, seed, test, work_folder)
 from ..course import lancer
 
 # Nombre de courses par scenario. Un defaut de concurrence ne se manifeste pas a tous les
@@ -281,3 +282,103 @@ def deux_suppressions_du_meme_email():
         raise Skip("aucune des courses ne s'est chevauchee : rien constate sur la concurrence")
     noter(_bilan(simultanees, COURSES))
     expect(not anomalies, "\n      ".join(anomalies[:5]))
+
+
+@test("CONC-06", "Aucune connexion IMAP n'est mise en cache ou partagee", "E-06")
+def pas_de_pool_de_connexions():
+    """Garde structurel. Il ne surveille pas un symptome mais **la cause unique** qui
+    rouvrirait deux risques distincts.
+
+    Ce que la mesure a etabli, en quatre modeles successifs dont trois faux :
+
+      - la fenetre de duplication vaut **moins d'une milliseconde** — la duree de la commande
+        `MOVE` elle-meme. En dessous de 0,5 ms la duplication est **deterministe** (5/5 sur
+        Dovecot) ; au-dela de 1 ms elle ne se produit jamais ;
+      - les envois HTTP partent pourtant a **0,06 - 0,24 ms** les uns des autres, soit plus
+        serre que la fenetre, et ne dupliquent jamais (0 sur 16 courses, deux serveurs) ;
+      - ce n'est donc **pas l'espacement des requetes** qui protege, mais la **variance du
+        preambule** que chaque requete execute avant d'atteindre le `MOVE` : ouverture de
+        connexion IMAP, `LOGIN`, `SELECT`.
+
+    Mesure de cette variance, barriere placee **avant** la connexion (elle demande un banc
+    interne, elle n'est pas observable depuis l'API) :
+
+        clients   preambule median   ecart-type   ecart MIN entre MOVE voisins
+             6            12 ms         5,0 ms                  2,06 - 2,43 ms
+            12            20 ms         9,0 ms                  1,86 - 2,01 ms
+            24            35 ms        18,1 ms                  0,93 - 1,70 ms
+            48            65 ms        35,1 ms                  1,00 - 1,28 ms
+
+    **La marge reelle est un facteur 2 a 3, pas un ordre de grandeur.** A 24 clients l'ecart
+    minimal touche 0,93 ms, le bord exact de la fenetre.
+
+    Et la protection est **auto-regulee** : plus il y a de clients, plus le preambule
+    ralentit, ce qui re-etale les requetes. L'ecart minimal ne s'effondre pas sous la charge,
+    il plafonne vers la milliseconde. **Ce n'est pas une marge de securite, c'est un
+    equilibre — et personne ne l'a concu.**
+
+    **Un pool de connexions supprimerait exactement cette variance** et transformerait le
+    chemin API en banc protocolaire : connexions etablies, dossier deja selectionne, `MOVE`
+    immediat. La fenetre deviendrait atteignable — et il n'y a que 2 a 3 fois de marge avant
+    d'y etre.
+
+    Et c'est **la meme cause** que le risque `_selection` d'A-20 : la reutilisation de la
+    selection de dossier n'est sure aujourd'hui que parce que rien ne partage
+    d'`IMAPManager`. Un pool rouvre les deux d'un coup.
+
+    D'ou un test de forme plutot que de comportement. Un test protocolaire serait rouge en
+    permanence, testerait le serveur plutot que MailIA, et doublonnerait le banc du
+    correcteur. Celui-ci ne depend ni du serveur ni du calendrier — meme technique que
+    `SMTP-06` pour `starttls()` et `SEC-G09` pour `extractall`.
+    """
+    BOX.require()
+    # Analyse par AST plutot que ligne a ligne : un decorateur `@lru_cache` vit sur une
+    # autre ligne que la construction qu'il met en cache, et une recherche textuelle le
+    # manque. C'est le cas que la premiere version de ce test laissait passer.
+    sortie = BOX.python(
+        "import ast, inspect, json\n"
+        "import src.imap.manager as M, src.mcp.context as C\n"
+        "import src.api.routes.accounts as A\n"
+        "CACHANTS = ('cache', 'lru_cache', 'cached', 'cached_property', 'memoize')\n"
+        "STRUCTURES = ('cache', 'pool', 'managers', 'connexions', 'connections', 'registry')\n"
+        "suspects = []\n"
+        "def construit_manager(noeud):\n"
+        "    return any(isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'IMAPManager'\n"
+        "               for n in ast.walk(noeud))\n"
+        "for nom, mod in (('imap/manager', M), ('mcp/context', C), ('api/accounts', A)):\n"
+        "    src = inspect.getsource(mod)\n"
+        "    arbre = ast.parse(src)\n"
+        "    for n in ast.walk(arbre):\n"
+        "        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and construit_manager(n):\n"
+        "            for d in n.decorator_list:\n"
+        "                nd = getattr(d, 'id', None) or getattr(d, 'attr', None) \\\n"
+        "                     or getattr(getattr(d, 'func', None), 'attr', None) \\\n"
+        "                     or getattr(getattr(d, 'func', None), 'id', None) or ''\n"
+        "                if any(c in nd.lower() for c in CACHANTS):\n"
+        "                    suspects.append('%s:%d  @%s sur %s()' % (nom, n.lineno, nd, n.name))\n"
+        # Un manager range dans une structure qui survit a l'appel : affectation dont la
+        # cible est un abonnement, un attribut, ou un nom evoquant un stockage partage.
+        "        if isinstance(n, (ast.Assign, ast.AugAssign)) and construit_manager(n):\n"
+        "            cibles = n.targets if isinstance(n, ast.Assign) else [n.target]\n"
+        "            for c in cibles:\n"
+        "                texte = ast.unparse(c).lower()\n"
+        "                if isinstance(c, (ast.Subscript, ast.Attribute)) or \\\n"
+        "                        any(m in texte for m in STRUCTURES):\n"
+        "                    suspects.append('%s:%d  %s = IMAPManager(...)' % (nom, n.lineno, ast.unparse(c)[:60]))\n"
+        # Un appel a .append()/.add() sur une structure, avec un manager en argument.
+        "        if isinstance(n, ast.Call) and construit_manager(n):\n"
+        "            f = n.func\n"
+        "            if isinstance(f, ast.Attribute) and f.attr in ('append', 'add', 'put', 'setdefault'):\n"
+        "                suspects.append('%s:%d  %s(...IMAPManager...)' % (nom, n.lineno, ast.unparse(f)[:60]))\n"
+        "print('__QA__' + json.dumps(sorted(set(suspects))))\n")
+    suspects = None
+    for ligne in sortie.splitlines():
+        if ligne.startswith("__QA__"):
+            suspects = json.loads(ligne[6:])
+    if suspects is None:
+        raise Skip(f"lecture du source impossible : {sortie[-200:]}")
+    expect(not suspects,
+           "un `IMAPManager` semble mis en cache ou partage. Cela supprimerait la variance "
+           "du preambule qui rend aujourd'hui la fenetre de duplication (<1 ms) "
+           "inatteignable par l'API, et rouvrirait en meme temps la course sur `_selection` "
+           "(A-20) :\n      " + "\n      ".join(suspects))

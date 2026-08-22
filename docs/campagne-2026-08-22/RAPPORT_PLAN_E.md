@@ -10,9 +10,9 @@
 
 | Défaut | Gravité | État |
 |---|---|---|
-| **E-01** — deux déplacements simultanés dupliquent le message | **MAJEUR** | ouvert |
-| **E-02** — deux suppressions simultanées dupliquent dans la corbeille | **MAJEUR** | ouvert |
-| **E-03** — un déplacement qui ne déplace rien annonce un succès | MOYEN | ouvert |
+| **E-01** — deux déplacements simultanés dupliquent le message | **MAJEUR** | corrigé, vérifié |
+| **E-02** — deux suppressions simultanées dupliquent dans la corbeille | **MAJEUR** | corrigé, vérifié |
+| **E-03** — un déplacement qui ne déplace rien annonce un succès | MOYEN | corrigé, vérifié |
 | E-04 — deux clients sur le même brouillon | **RETIRÉ** | comportement normal de l'endpoint |
 | E-05 — création simultanée du même dossier | RAS | un seul dossier, aucun 500 |
 | E-06 — suppression pendant lecture | RAS | jamais de contenu tronqué |
@@ -125,6 +125,90 @@ Trouvé dans le témoin séquentiel, en cherchant autre chose : le second `move`
   dépendante du serveur déjà rencontré sur le zip slip ;
 - **`MOVE` atomique ne ferme pas E-03.** Un `MOVE` sur un UID inexistant réussit du point de
   vue du protocole. Il faut vérifier qu'il a bougé quelque chose.
+
+---
+
+## Après correctif : la course resserrée, et ce que ma mesure ne prouve pas
+
+`fixer` a corrigé E-01, E-02 et E-03, puis signalé une réserve qui valait plus que son
+résultat : sa mesure **au niveau protocole** montre que `UID MOVE` reste dupliquant sur
+Dovecot (6/6), et que le 0/6 obtenu par l'API vient peut-être du coût d'établissement des
+connexions, qui désaligne les requêtes avant la section critique. **Une protection par le
+calendrier, pas par construction.**
+
+J'ai donc resserré la course autant que possible depuis l'extérieur : 6 clients au lieu de 2,
+connexions HTTPS **pré-établies et déjà utilisées** (handshake et démarrage hors course),
+`keep-alive`, barrière de synchronisation, 10 courses par serveur.
+
+| Serveur | chevauchement HTTP | duplications | codes |
+|---|---|---|---|
+| GreenMail (compte 3) | 203 à 1040 ms | **0 / 10** | 1 × `200`, 5 × `404` |
+| Dovecot (compte 30) | 45 à 60 ms | **0 / 10** | 1 × `200`, 5 × `404` |
+
+Le motif de réponses est exactement celui attendu : un gagnant, cinq clients informés que le
+message n'est plus là. Le `MessageGone` → `404` de `fixer` tient à six clients.
+
+### Ce que cette mesure ne dit pas
+
+**Le chevauchement affiché est celui des requêtes HTTP, pas celui des commandes IMAP.** Chaque
+requête ouvre sa propre connexion IMAP, s'authentifie et fait un `SELECT` avant d'atteindre le
+`MOVE`. Ce préambule coûte à lui seul de l'ordre de la durée du chevauchement obtenu.
+
+Je n'ai donc **pas réfuté** l'hypothèse de `fixer` : je n'arrive pas à atteindre la fenêtre
+résiduelle depuis l'extérieur, ce qui n'est pas la même chose que montrer qu'elle est fermée.
+Le désalignement s'est peut-être simplement déplacé du HTTP vers l'IMAP.
+
+Sa mesure au niveau protocole reste la plus informative des deux.
+
+### Ce qu'elle établit, après quatre modèles successifs dont trois faux
+
+La question « la course est-elle fermée ? » a reçu quatre réponses successives, en trois
+heures, entre `fixer` et moi. Les trois premières étaient fausses — et **toutes cohérentes,
+appuyées sur de vraies mesures**, ce qui est exactement ce qui les rendait crédibles.
+
+| Modèle | Fenêtre supposée | Ce qui l'a démoli |
+|---|---|---|
+| 1 — le `MOVE` n'est pas atomique | durée du `MOVE` | `UID MOVE` atomique duplique quand même |
+| 2 — intervalle `SELECT` → `MOVE` | ~6 ms | une session gardant son instantané 10 s ne duplique pas |
+| 3 — mes requêtes sont trop espacées | facteur 30 puis 10 | mes envois sont à 0,06–0,24 ms, **plus serrés** que la fenêtre |
+| 4 — variance du préambule | < 1 ms, marge ×2–3 | tient |
+
+**Le modèle retenu**, mesuré par `fixer` avec la barrière placée avant la connexion — une
+mesure impossible depuis l'API :
+
+```
+clients   preambule median   ecart-type   ecart MIN entre MOVE voisins
+     6            12 ms         5,0 ms                2,06 - 2,43 ms
+    12            20 ms         9,0 ms                1,86 - 2,01 ms
+    24            35 ms        18,1 ms                0,93 - 1,70 ms
+    48            65 ms        35,1 ms                1,00 - 1,28 ms
+```
+
+Fenêtre : duplication systématique sous 0,5 ms, jamais au-delà de 1 ms.
+
+**La marge réelle est un facteur 2 à 3.** Pas trente, pas dix. À 24 clients l'écart minimal
+touche 0,93 ms — le bord exact de la fenêtre, frôlée sans être franchie.
+
+Et la protection est **auto-régulée** : plus il y a de clients, plus le préambule ralentit, ce
+qui ré-étale les requêtes. L'écart minimal ne s'effondre pas sous la charge, il plafonne vers
+la milliseconde. C'est pourquoi ni `fixer` ni moi n'avons jamais vu de duplication par l'API
+sur plus d'une centaine de courses.
+
+> **Ce n'est pas une marge de sécurité, c'est un équilibre — et personne ne l'a conçu.**
+
+### Ce que cela change pour la décision
+
+La formulation « la fenêtre n'est pas atteignable » était trop rassurante. La bonne est :
+**la fenêtre est maintenue hors de portée par un mécanisme accidentel, avec un facteur 2 à 3
+de marge.**
+
+Deux conséquences pour l'arbitrage du verrou, qui appartient à l'utilisateur :
+
+- **un pool de connexions supprime la variance** et amène la fenêtre à portée. C'est la même
+  cause que le risque `_selection` d'A-20, et `CONC-06` garde les deux ;
+- **le chemin worker n'exécute pas ce préambule à chaque opération**, donc il ne bénéficie
+  pas de cet équilibre. Non mesurable tant que le worker est arrêté — signalé comme **non
+  couvert**, pas comme fermé.
 
 ---
 

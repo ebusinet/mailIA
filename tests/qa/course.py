@@ -94,12 +94,31 @@ class Course:
     def simultanee(self) -> bool:
         return self.chevauchement > 0 and self.recouvrement >= self.SEUIL_RECOUVREMENT
 
+    @property
+    def ecart_min_entre_voisins(self) -> float:
+        """Plus petit intervalle entre deux departs consecutifs, en secondes.
+
+        C'est ce chiffre — et non le chevauchement — qui dit si une course peut atteindre
+        une fenetre etroite. Le chevauchement est un **etalement** : il mesure la periode ou
+        TOUS les tirs sont en vol. Avec six clients, un etalement de 50 ms peut correspondre
+        a des voisins espaces de 10 ms comme a des voisins espaces de 0,1 ms.
+
+        Confondre les deux fait conclure « je me suis approche a 50 ms » quand une paire est
+        peut-etre passee a 0,1 ms — ou l'inverse. Pour une fenetre inferieure a la
+        milliseconde, seul l'ecart entre voisins compte.
+        """
+        if len(self.tirs) < 2:
+            return 0.0
+        departs = sorted(t.debut for t in self.tirs)
+        return min(b - a for a, b in zip(departs, departs[1:]))
+
     def resultats(self) -> list:
         return [t.resultat for t in self.tirs]
 
     def __str__(self) -> str:
         return (f"{len(self.tirs)} tirs, chevauchement {self.chevauchement * 1000:.0f} ms "
                 f"({self.recouvrement * 100:.0f} % du plus court), "
+                f"voisins les plus proches {self.ecart_min_entre_voisins * 1000:.2f} ms, "
                 + ", ".join(f"{t.nom}={t.duree * 1000:.0f}ms" for t in self.tirs))
 
 
