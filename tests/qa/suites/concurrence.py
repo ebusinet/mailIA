@@ -326,6 +326,15 @@ def pas_de_pool_de_connexions():
     selection de dossier n'est sure aujourd'hui que parce que rien ne partage
     d'`IMAPManager`. Un pool rouvre les deux d'un coup.
 
+    **Reserve : cette protection ne couvre pas le chemin worker.** La boucle de
+    synchronisation ne paie pas le preambule a chaque operation — elle garde son
+    `IMAPManager` et son dossier selectionne pendant tout un lot. Elle ne beneficie donc pas
+    de la variance qui protege le chemin API, et rien ne garantit l'espacement de ses `MOVE`
+    vis-a-vis d'une action utilisateur simultanee.
+
+    Non mesurable tant que le worker est arrete : consigne comme **non couvert**, pas comme
+    ferme. Ce test ne dit donc rien de ce chemin-la.
+
     D'ou un test de forme plutot que de comportement. Un test protocolaire serait rouge en
     permanence, testerait le serveur plutot que MailIA, et doublonnerait le banc du
     correcteur. Celui-ci ne depend ni du serveur ni du calendrier — meme technique que
