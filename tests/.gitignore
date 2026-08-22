@@ -1,0 +1,4 @@
+# Jeton du compte QA — ne doit jamais etre versionne.
+.qa_token
+__pycache__/
+*.pyc

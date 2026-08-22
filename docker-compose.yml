@@ -158,6 +158,18 @@ services:
     networks:
       - mailia-net
 
+  greenmail:
+    image: greenmail/standalone:2.1.0
+    container_name: mailia-greenmail
+    restart: unless-stopped
+    environment:
+      - GREENMAIL_OPTS=-Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap -Dgreenmail.users=test:testpass123@mailia.local -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.verbose
+    ports:
+      - "127.0.0.1:3025:3025"
+      - "127.0.0.1:3143:3143"
+    networks:
+      - mailia-net
+
 volumes:
   postgres_data:
   elastic_data:
