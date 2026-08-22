@@ -316,7 +316,20 @@ passer pour n'importe quel serveur. Le test reste marqué « non exécutable »,
 
 ## État de la suite de tests
 
-100 tests au total, dont 22 issus du Plan A. Chaque défaut trouvé a son test.
+100 tests, un par défaut trouvé. **Mesure finale sur le build portant tous les correctifs, deux
+passages par serveur, identiques test par test :**
+
+| Serveur | Résultat |
+|---|---|
+| Dovecot (strict) | **87 PASS · 0 FAIL · 12 SKIP** |
+| GreenMail (permissif) | **97 PASS · 0 FAIL · 2 SKIP** |
+
+Zéro échec des deux côtés. Les ignorés sont les tests hors profil de serveur, les six chemins
+d'envoi bloqués par le certificat auto-signé, et la propriété que le worker arrêté rend
+inobservable — chacun avec sa raison affichée, jamais un succès silencieux.
+
+La couverture complète exige les deux exécutions : aucun test n'est ignoré sur les deux serveurs à
+la fois, ce que la suite vérifie explicitement.
 
 ## 7. Décisions qui vous appartiennent
 
