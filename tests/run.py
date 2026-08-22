@@ -30,9 +30,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qa.core import (BOX, CFG, REGISTRY, Failure, GuardError,  # noqa: E402
-                     Skip, nettoyage_final, profil_serveur)
+                     Skip, nettoyage_final, prendre_notes, profil_serveur)
 from qa.guard import run_guard  # noqa: E402
-from qa.suites import (duplication, emails, guard_selftest,  # noqa: E402,F401
+from qa.suites import (concurrence, duplication, emails,  # noqa: E402,F401
+                       guard_selftest,
                        isolation, misc, robustesse, rules_and_storage,
                        search, securite, smtp_paths)
 
@@ -140,6 +141,8 @@ def main() -> int:
               f"{GRIS}{duree:.1f}s{RAZ}", flush=True)
         if statut == "SKIP":
             print(f"       {JAUNE}> {detail}{RAZ}", flush=True)
+        for note in prendre_notes():
+            print(f"       {GRIS}| {note}{RAZ}", flush=True)
 
     # ---- Menage ----------------------------------------------------------
     if not args.no_guard:

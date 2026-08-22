@@ -440,6 +440,23 @@ def _cause_environnement(texte: str) -> None:
             "verifient sur le serveur permissif.")
 
 
+# Un test peut deposer une precision affichee meme quand il passe. Necessaire des qu'un vert
+# ne veut pas dire la meme chose selon les conditions : « vert sur 12 courses dont 12 avec
+# chevauchement prouve » n'est pas « vert ». Sans ca, l'information n'existe que dans les
+# echecs, c'est-a-dire jamais quand tout va bien.
+_NOTES: list[str] = []
+
+
+def noter(texte: str) -> None:
+    _NOTES.append(texte)
+
+
+def prendre_notes() -> list[str]:
+    notes = list(_NOTES)
+    _NOTES.clear()
+    return notes
+
+
 def expect(condition, message: str):
     if condition:
         return

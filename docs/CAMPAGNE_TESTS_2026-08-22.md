@@ -254,7 +254,13 @@ Elle compte 100 tests, un par défaut trouvé. Ce qu'elle ne fait pas mérite d'
 qu'une suite dont on croit qu'elle prouve tout est plus dangereuse qu'une suite dont on connaît
 les limites.
 
-- **Un seul de ses tests a été observé passant du rouge au vert** sur le correctif attendu. C'est
+- **Sur les 14 tests de sécurité et de concurrence, six seulement ont été observés dans l'état
+  qu'ils surveillent** — rouges sur le défaut réel, verts après correction. Les huit autres passent
+  sans que rien ne prouve qu'ils échoueraient si la propriété se cassait. Deux méritent une
+  mention : l'un surveille une protection **positionnelle**, qui tient à l'ordre des vérifications
+  et non à un contrôle explicite ; l'autre surveille une propriété fournie par la bibliothèque
+  standard, donc restera vert quoi qu'il arrive à l'application.
+- **Un seul des tests de la première suite a été observé passant du rouge au vert** sur le correctif attendu. C'est
   la seule preuve qu'un test discrimine. Les autres sont crus, pas prouvés. D'où la règle inscrite
   dans `tests/README.md` : *un test de sécurité doit avoir été vu rouge au moins une fois.*
 - **Elle ne détecte pas une exécution concurrente.** Un redéploiement, elle le voit — réponse sans
@@ -396,6 +402,66 @@ Le conteneur applicatif s'exécute en **root**, avec les sources accessibles en 
 pas un défaut du code — c'est ce qui transforme une écriture hors périmètre en exécution de code.
 Faire tourner le processus sous un utilisateur non privilégié réduirait la gravité de toute une
 classe de défauts, connus et à venir.
+
+---
+
+# Phase 4 — Volume et concurrence (Plans F et E)
+
+## Ce que le volume a donné : le chiffre qui débloquait tout
+
+La décision de redémarrer le moteur de synchronisation était bloquée faute d'une mesure. Elle
+existe :
+
+| | Avant correctif | Après |
+|---|---|---|
+| Allers-retours IMAP par email | 2,00 | **1,00** |
+| Synchronisation de 7 562 emails | 15,5 s | **3,8 s** |
+| Rattrapage complet (45 000 emails) | 48,8 min | **24,5 min** |
+| Premier cycle | 24 min 55 s | **12 min 28 s** |
+
+Un des deux allers-retours était inutile : le code redemandait au serveur d'ouvrir le dossier avant
+**chaque** message, alors qu'il en enchaîne des centaines dans le même.
+
+Les limites de temps avaient été posées au jugé la première nuit : elles laissaient **cinq secondes
+de marge**. Elles reposent désormais sur la mesure, et **la marge vient du travail supprimé plutôt
+que du réglage** — le pire cycle occupe le quart du budget au lieu de le dépasser.
+
+Le volume a aussi révélé un blocage : **un seul email au sujet mal encodé arrêtait définitivement la
+synchronisation de son dossier**, rejouée à l'identique à chaque cycle. Le message d'erreur
+accusait une bibliothèque sans rapport — quelqu'un qui l'aurait suivi n'aurait jamais trouvé.
+
+### Une optimisation construite pour ne pas pouvoir corrompre
+
+Le raccourci évident était de mémoriser le dossier sélectionné. Il a été écarté : **les
+identifiants de message sont propres à chaque dossier**, donc une lecture au mauvais endroit
+renvoie un message parfaitement valide — et faux. Rien ne le signalerait.
+
+La réutilisation est donc explicite, demandée par le seul appelant qui peut garantir que rien ne
+change de dossier pendant qu'il travaille. Prouvé avec deux dossiers contenant chacun un message
+portant le même identifiant.
+
+## Ce que la concurrence a donné
+
+Trois défauts, une même cause : **déplacer un email n'est pas une opération atomique** — trois
+commandes successives, aucune transaction.
+
+- Deux déplacements simultanés du même message produisent **deux copies**.
+- Deux suppressions simultanées, de même.
+- Et déplacer un message inexistant répond « déplacé » — donc dans une course, **les deux clients
+  reçoivent un succès alors qu'un seul a agi**.
+
+### Le contrôle qui a retourné un constat
+
+Trois scénarios échouaient douze fois sur douze. Cette régularité a servi d'alarme plutôt que de
+preuve : *une vraie course ne se déclenche presque jamais à tous les coups.*
+
+Un témoin séquentiel — les mêmes opérations, l'une après l'autre — a montré qu'un des trois cas se
+comportait déjà ainsi hors concurrence. Le constat a été retiré, avec l'explication laissée dans le
+fichier de test pour que personne ne le réécrive.
+
+C'est l'erreur symétrique de celle commise la veille, où un défaut du produit avait été imputé au
+test. Même cause dans les deux sens : **conclure d'une observation sans le contrôle qui
+l'interprète.**
 
 ## 7. Décisions qui vous appartiennent
 
