@@ -1912,9 +1912,15 @@ function setCookie(k, v, days) { const d = new Date(); d.setTime(d.getTime() + (
 function getCookie(k) { const m = document.cookie.match('(^|;)\\s*' + k + '=([^;]*)'); return m ? decodeURIComponent(m[2]) : ''; }
 function delCookie(k) { document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/'; }
 
-// Check for password reset token in URL
-const _urlParams = new URLSearchParams(window.location.search);
-if (_urlParams.get('reset_token')) {
+// Check for password reset token in URL.
+// Le lien envoye par mail place le jeton dans le FRAGMENT (#) et non la query string :
+// un fragment n'est jamais transmis au serveur, donc ni journalise ni renvoye en Referer.
+// La query string reste lue en repli, pour les liens deja envoyes avant ce changement.
+function _getResetToken() {
+    const h = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+    return h.get('reset_token') || new URLSearchParams(window.location.search).get('reset_token') || '';
+}
+if (_getResetToken()) {
     document.getElementById('login-form').classList.add('hidden');
     document.getElementById('reset-form').classList.remove('hidden');
 } else if (token) {
@@ -1996,14 +2002,14 @@ async function resetPassword() {
     const pw2 = document.getElementById('reset-password-confirm').value;
     if (!pw || pw.length < 6) { msgEl.style.color = 'var(--c-text-error)'; msgEl.textContent = 'Le mot de passe doit contenir au moins 6 caracteres.'; return; }
     if (pw !== pw2) { msgEl.style.color = 'var(--c-text-error)'; msgEl.textContent = 'Les mots de passe ne correspondent pas.'; return; }
-    const params = new URLSearchParams(window.location.search);
-    const resetToken = params.get('reset_token');
+    const resetToken = _getResetToken();
     if (!resetToken) { msgEl.style.color = 'var(--c-text-error)'; msgEl.textContent = 'Lien de reinitialisation invalide.'; return; }
     try {
         const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: resetToken, new_password: pw }) });
         if (data.access_token) {
             token = data.access_token;
             localStorage.setItem('mailia_token', token);
+            // Effacer aussi le fragment : sinon le jeton reste dans la barre d'adresse.
             window.history.replaceState({}, '', window.location.pathname);
             initApp();
         } else {

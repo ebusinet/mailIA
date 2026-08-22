@@ -300,15 +300,16 @@ class IMAPManager:
         except Exception:
             date_formatted = date_str
 
-        from_addr = email.utils.parseaddr(msg.get("From", ""))[1]
-        to_addr = email.utils.parseaddr(msg.get("To", ""))[1]
+        # str() avant parseaddr : ces en-tetes aussi peuvent revenir en objet Header
+        from_addr = email.utils.parseaddr(str(msg.get("From", "") or ""))[1]
+        to_addr = email.utils.parseaddr(str(msg.get("To", "") or ""))[1]
 
         return EmailContext(
             uid=uid,
             folder=folder,
             from_addr=from_addr,
             to_addr=to_addr,
-            subject=msg.get("Subject", ""),
+            subject=_decode_header(msg.get("Subject", "")),
             body_text=body_text,
             has_attachments=has_attachments,
             attachment_names=attachment_names,
@@ -748,6 +749,30 @@ def _uid_search(conn, criteria: str):
     except UnicodeEncodeError:
         return conn.uid("SEARCH", "CHARSET", "UTF-8", criteria.encode("utf-8"))
     return conn.uid("SEARCH", None, criteria)
+
+
+def _decode_header(raw) -> str:
+    """Return a header as text, whatever the sender put in it.
+
+    `msg.get("Subject")` returns an `email.header.Header` — not a str — when the header
+    carries raw 8-bit bytes instead of an RFC 2047 encoded-word. That object then travels
+    all the way to Elasticsearch, whose serializer rejects it with a message about
+    `np.float_`, and the folder's sync cursor stops there for good.
+    """
+    import email.header
+    if raw is None:
+        return ""
+    parts = email.header.decode_header(raw)
+    morceaux = []
+    for part, charset in parts:
+        if isinstance(part, bytes):
+            try:
+                morceaux.append(part.decode(charset or "utf-8", errors="replace"))
+            except (UnicodeDecodeError, LookupError):
+                morceaux.append(part.decode("utf-8", errors="replace"))
+        else:
+            morceaux.append(part)
+    return " ".join(morceaux)
 
 
 def _resolve_flag(flag: str) -> str:

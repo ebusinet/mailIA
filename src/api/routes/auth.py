@@ -12,7 +12,7 @@ from src.db.session import get_db
 from src.db.models import User, MailAccount
 from src.security import (
     hash_password, verify_password, create_access_token,
-    create_reset_token, decode_reset_token, decrypt_value,
+    create_reset_token, decode_reset_token, decrypt_value, password_fingerprint,
 )
 from src.api.deps import get_current_user, get_current_admin
 from src.config import get_settings
@@ -105,8 +105,11 @@ async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends
     if not user:
         return {"status": "ok"}
 
-    reset_token = create_reset_token(user.id)
-    reset_url = f"{settings.app_url}/static/index.html?reset_token={reset_token}"
+    reset_token = create_reset_token(user.id, user.password_hash)
+    # Fragment et non query string : un `#` ne part ni dans les journaux du serveur web,
+    # ni dans l'en-tete Referer envoye aux tiers que la page charge, ni dans l'historique
+    # partage — tout en restant lisible par le JavaScript de la page.
+    reset_url = f"{settings.app_url}/static/index.html#reset_token={reset_token}"
 
     # Find an SMTP-capable account to send the email (admin first, then any).
     # NOTE: this borrows a real user's mailbox — an unauthenticated request therefore
@@ -189,17 +192,23 @@ async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends
 @router.post("/reset-password")
 async def reset_password(req: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     """Reset the password using a valid reset token."""
-    user_id = decode_reset_token(req.token)
-    if user_id is None:
+    claims = decode_reset_token(req.token)
+    if claims is None:
         raise HTTPException(status_code=400, detail="Lien invalide ou expire")
 
     if len(req.new_password) < 6:
         raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 6 caracteres")
 
-    result = await db.execute(select(User).where(User.id == user_id, User.is_active.is_(True)))
+    result = await db.execute(select(User).where(User.id == claims["user_id"], User.is_active.is_(True)))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=400, detail="Utilisateur introuvable")
+
+    # Usage unique : l'empreinte est celle du mot de passe au moment de l'emission.
+    # Des que le mot de passe change, le lien cesse de valoir — y compris apres un usage
+    # legitime, ou si l'utilisateur a change son mot de passe entre-temps.
+    if claims.get("pv") != password_fingerprint(user.password_hash):
+        raise HTTPException(status_code=400, detail="Lien invalide ou expire")
 
     user.password_hash = hash_password(req.new_password)
     await db.commit()

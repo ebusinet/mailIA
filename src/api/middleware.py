@@ -18,11 +18,64 @@ RATE_LIMIT_RULES = {
 }
 
 
+def _est_adresse_de_mandataire(valeur: str) -> bool:
+    """Adresse appartenant a l'infrastructure : boucle locale ou reseau prive."""
+    import ipaddress
+    try:
+        adr = ipaddress.ip_address(valeur)
+    except ValueError:
+        return False  # valeur non analysable : on la traite comme fournie par le client
+    return adr.is_private or adr.is_loopback or adr.is_link_local or adr.is_reserved
+
+
 def _get_client_ip(request: Request) -> str:
+    """Adresse a utiliser comme cle de limitation de debit.
+
+    `X-Forwarded-For` est ecrit par le client ET complete par nginx, qui **ajoute**
+    l'adresse reelle en fin de liste (`$proxy_add_x_forwarded_for`). Retenir le PREMIER
+    element revenait donc a laisser l'appelant choisir sa propre cle : une ligne
+    `X-Forwarded-For: 203.0.113.<compteur>` suffisait a rendre la limite inoperante.
+
+    On parcourt donc la liste **de droite a gauche** et on retient la premiere adresse
+    qui n'appartient pas a l'infrastructure. Ce parcours ne depend pas du nombre de
+    mandataires : ajouter un hop demain ne rouvre pas la faille.
+    """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        elements = [p.strip() for p in forwarded.split(",") if p.strip()]
+        for candidat in reversed(elements):
+            if not _est_adresse_de_mandataire(candidat):
+                return candidat
+        if elements:
+            # Tout est prive : appel interne. La derniere entree est celle qu'a ecrite
+            # l'infrastructure, jamais celle que le client a fournie.
+            return elements[-1]
+    # nginx REMPLACE X-Real-IP (il ne l'ajoute pas), une valeur fournie par le client
+    # est donc ecrasee. Utilisable en repli quand X-Forwarded-For est absent.
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and real_ip.strip():
+        return real_ip.strip()
     return request.client.host if request.client else "unknown"
+
+
+_derniere_alerte = 0.0
+
+
+def _signaler_protection_absente(motif: str) -> None:
+    """Le limiteur laisse passer en cas de panne — c'est voulu, une panne Redis ne doit
+    pas empecher toute connexion. Mais une protection qui disparait en silence est pire
+    qu'une protection absente : on croit l'avoir. On journalise donc en ERROR, en clair,
+    au plus une fois par minute pour ne pas noyer les journaux sous la charge."""
+    global _derniere_alerte
+    maintenant = time.time()
+    if maintenant - _derniere_alerte < 60:
+        return
+    _derniere_alerte = maintenant
+    logger.error(
+        "LIMITATION DE DEBIT DESACTIVEE — %s. Les endpoints d'authentification "
+        "acceptent un nombre illimite de tentatives tant que ce message se repete.",
+        motif,
+    )
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -44,7 +97,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 await client.ping()
                 self._redis = client
             except Exception as e:
-                logger.warning(f"Rate limiter: Redis unavailable ({e}), skipping")
+                _signaler_protection_absente(f"Redis indisponible ({e})")
                 return None
         return self._redis
 
@@ -81,7 +134,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     headers={"Retry-After": str(retry_after)},
                 )
         except Exception as e:
-            logger.warning(f"Rate limiter error: {e}, allowing request")
+            _signaler_protection_absente(f"erreur du limiteur ({e})")
 
         return await call_next(request)
 
