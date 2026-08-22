@@ -30,10 +30,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qa.core import (BOX, CFG, REGISTRY, Failure, GuardError,  # noqa: E402
-                     Skip, nettoyage_final)
+                     Skip, nettoyage_final, profil_serveur)
 from qa.guard import run_guard  # noqa: E402
-from qa.suites import (duplication, emails, guard_selftest, isolation,  # noqa: E402,F401
-                       misc, rules_and_storage, search, smtp_paths)
+from qa.suites import (duplication, emails, guard_selftest,  # noqa: E402,F401
+                       isolation, misc, robustesse, rules_and_storage,
+                       search, smtp_paths)
 
 VERT, ROUGE, JAUNE, GRIS, GRAS, RAZ = (
     ("\033[32m", "\033[31m", "\033[33m", "\033[90m", "\033[1m", "\033[0m")
@@ -106,6 +107,16 @@ def main() -> int:
             print(f"{GRAS}{groupe_courant}{RAZ}", flush=True)
         t0 = time.time()
         try:
+            # Un test declare le profil de serveur dont il a besoin pour demontrer quoi que
+            # ce soit. L'executer ailleurs produirait un vert sans valeur : un test de
+            # securite sur un serveur strict passe parce que LE SERVEUR refuse, pas
+            # l'application. On le dit plutot que de le laisser rassurer a tort.
+            profil = profil_serveur()
+            if t.serveur != "indifferent" and profil != t.serveur:
+                raise Skip(
+                    f"ce test exige un serveur « {t.serveur} » pour prouver quelque chose ; "
+                    f"le compte teste est sur un serveur « {profil} ». Le rejouer avec "
+                    f"MAILIA_QA_ACCOUNT_ID pointant sur l'autre serveur.")
             t.fn()
             statut, detail = "PASS", ""
         except Skip as e:

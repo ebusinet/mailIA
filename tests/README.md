@@ -64,7 +64,7 @@ La suite ne démarre jamais `mailia-worker` ni `mailia-beat`.
 |---|---|---|
 | `MAILIA_QA_TOKEN` | — | Jeton JWT du compte QA. **Obligatoire.** |
 | `MAILIA_API_URL` | `https://mailia.expert-presta.com/api` | Base de l'API |
-| `MAILIA_QA_ACCOUNT_ID` | `3` | Compte de messagerie de test |
+| `MAILIA_QA_ACCOUNT_ID` | `3` | Compte de messagerie de test. `3` = GreenMail (séparateur `.`), `30` = Dovecot (séparateur `/`, STARTTLS réel). La suite se connecte au serveur **du compte choisi**, lu en base — jamais à un hôte codé en dur. |
 | `MAILIA_SSH_HOST` | `expert-presta` | Hôte SSH pour les tests de rang 2 |
 | `MAILIA_API_CONTAINER` | `mailia-api` | Conteneur applicatif |
 | `MAILIA_TIMEOUT` | `60` | Délai HTTP, en secondes |
@@ -110,7 +110,7 @@ que ce que couvrent les 40.
 
 ## 5. Ce que la suite couvre
 
-78 tests, chacun rattaché au bug qu'il empêche de revenir. L'identifiant du bug d'origine
+99 tests, chacun rattaché au bug qu'il empêche de revenir. L'identifiant du bug d'origine
 (`F-00`, `N-04`, `FE-01`…) est affiché à côté de chaque test et rappelé dans le rapport
 d'échec.
 
@@ -123,6 +123,7 @@ d'échec.
 | `emails` | 10 | Listage, pagination, six combinaisons de tri, cohérence des trois sources de date, filtres, pièces jointes, export. |
 | `rules_and_storage` | 8 | Opérateurs de règles, destinataires multiples, analyse du markdown IA, stockage local aller-retour sans perte de date, import et dédoublonnage. |
 | `misc` | 17 | Dossiers, spam, contacts, signatures, création de compte, fournisseurs IA, administration, en-têtes de sécurité, limitation de débit. |
+| `robustesse` | 21 | Valeurs limites sur les champs libres : noms ne désignant aucun dossier, caractères de contrôle, jokers IMAP, ensembles d'UID là où un seul est attendu, listes malformées, identifiants de stockage local, injection de commande dans les critères de recherche. |
 | `guard_selftest` | 14 | Le garde-fou lui-même. |
 
 ### `DUP-02` : un bug trouvé par la suite, puis corrigé
@@ -131,6 +132,22 @@ Ce test a échoué à la toute première exécution de la suite et a mis au jour
 données : `POST /message/{uid}/move` avec `target_folder: ""` répondait
 `200 {"status": "moved"}`, retirait l'email du dossier source et ne le déposait nulle part.
 Le défaut a été corrigé ; le test est vert et garde la porte fermée.
+
+### `robustesse` : des tests qui ont détruit la boîte avant de la protéger
+
+Ce groupe envoie délibérément les valeurs qui ont provoqué les pertes de données. Tant que le
+défaut correspondant était ouvert, les exécuter détruisait réellement l'environnement de test —
+380 messages et 55 dossiers lors de la découverte. Ils ont donc vécu quelque temps derrière une
+activation explicite (`MAILIA_FUZZ=1`), le temps que les correctifs arrivent.
+
+**Ce garde a été retiré**, et c'était la condition pour qu'ils servent à quelque chose : ces
+valeurs sont désormais refusées avant toute commande IMAP, donc les tests s'exécutent sans rien
+casser. Un test qui ne s'exécute jamais ne protège rien.
+
+Les plus destructeurs encadrent malgré tout leur cas d'un **recensement global** — nombre de
+messages dans tous les dossiers, lu directement en IMAP plutôt que par l'application. C'est la
+seule mesure qui ne peut pas être faussée par le défaut recherché : un `200 {"status": "moved"}`
+sur un message détruit se lit comme un succès partout ailleurs.
 
 ### Deux tests structurels, à ne pas supprimer
 
@@ -245,3 +262,104 @@ Trois règles :
    différence. C'est ce qu'on lira six mois plus tard.
 3. **Renseigner le bug d'origine** en troisième argument : il apparaît dans le rapport et
    raccroche l'échec à son histoire.
+
+---
+
+## 11. Deux serveurs, et ce que chacun révèle
+
+La suite tourne contre deux serveurs jetables, choisis par `MAILIA_QA_ACCOUNT_ID`. Ce n'est pas
+une redondance : chacun masque ce que l'autre montre.
+
+| | GreenMail (compte 3) | Dovecot (compte 30) |
+|---|---|---|
+| Séparateur de hiérarchie | `.` | `/` |
+| `.` dans un nom de boîte | accepté | **refusé** (`CANNOT Character not allowed`) |
+| STARTTLS | absent | réel, **certificat auto-signé** |
+| Recherche `FROM` par sous-chaîne | non supportée | supportée |
+| `DELETE` sur dossier renommé | échoue souvent | fiable |
+
+Conséquences pratiques :
+
+- **Les chemins d'envoi ne sont pas testables sur Dovecot, et ce SKIP est permanent.** Son
+  certificat est auto-signé et l'application le refuse — à juste titre. Les tests concernés
+  rendent un `SKIP` explicite disant qu'ils n'ont rien constaté sur le produit, jamais un PASS.
+
+  Le remède évident — ajouter le certificat de test au magasin de confiance du conteneur
+  (`TRUST_TEST_CERTS=1` dans `docker/Dockerfile.api`) — **ne doit pas être appliqué ici** :
+  `mailia-api` détient les identifiants IMAP du compte professionnel réel, et la clé privée de
+  l'autorité de test est versionnée dans le dépôt. L'activer rendrait triviale l'usurpation de
+  n'importe quel serveur auprès de ce conteneur, pour le seul bénéfice de faire passer un test
+  de `SKIP` à `PASS`. À réserver à un conteneur QA ne servant aucun compte réel.
+
+  Les six chemins d'envoi se vérifient donc sur GreenMail.
+- **Un écart entre les deux serveurs est une information, pas un incident.** C'est soit un bug
+  MailIA, soit une hypothèse implicite sur le serveur qu'il faut écrire noir sur blanc. Exemple
+  réel : la divergence entre `create-folder` (API, nom transmis verbatim) et `create_folder`
+  (MCP, découpage sur `/` et séparateur découvert dynamiquement) est **invisible sur Dovecot**,
+  qui refuse le cas ambigu, et observable sur GreenMail.
+- Les deux tests **structurels** `SMTP-06` et `SMTP-07` passent partout : ils lisent la forme du
+  code, pas le comportement du transport.
+
+## 11 bis. Chaque test choisit son serveur — et le dit
+
+C'est le point le moins intuitif de la suite, et le plus important pour sa credibilite.
+
+**Un test de securite qui conclut « aucun temoin cree » doit tourner sur le serveur le plus
+PERMISSIF.** Sur un serveur strict, la commande injectee est refusee par le serveur lui-meme :
+le test passe au vert sans que l'application y soit pour quoi que ce soit. Il ne prouve rien,
+mais il rassure — le pire des deux mondes.
+
+**Un test fonctionnel qui conclut « la requete marche » doit tourner sur le plus STRICT.** Sur
+un serveur limite, une requete parfaitement correcte echoue et dement a tort un correctif qui
+fonctionne.
+
+Les deux faux negatifs vont donc dans des **sens opposes**, et aucun serveur ne protege des
+deux. Les deux mesures qui l'ont etabli :
+
+| Cas | GreenMail (permissif) | Dovecot (strict) |
+|---|---|---|
+| ` a2 CREATE X` (ligne precedee d'une espace) | `OK CREATE completed` | `BAD Invalid tag` |
+| recherche d'un objet accentue | ne trouve pas | trouve |
+
+Sur le premier, seul GreenMail prouve l'exploit. Sur le second, seul Dovecot valide le
+correctif. Un serveur unique, quel qu'il soit, aurait produit un faux negatif dans un cas.
+
+### Comment c'est applique
+
+Un test declare son besoin :
+
+```python
+@test("ROB-15", "…n'injecte pas de commande", "A-11", serveur="permissif")
+@test("ROB-20", "Les recherches legitimes passent…", "A-11", serveur="strict")
+@test("ROB-01", "…", "A-01")                      # indifferent, le defaut
+```
+
+Execute sur le mauvais profil, il rend **SKIP avec la raison** — jamais un PASS. Le profil est
+deduit de l'hote IMAP du compte teste, tel que le garde-fou l'a valide.
+
+**La couverture complete demande donc les deux executions**, l'une avec
+`MAILIA_QA_ACCOUNT_ID=3`, l'autre avec `30`. Un seul passage laisse une partie des tests en
+SKIP, et le rapport le dit explicitement.
+
+---
+
+## 12. Trois signaux qui ne veulent pas dire ce qu'on croit
+
+Chacun a produit un faux résultat pendant la campagne. Ils sont retenus ici parce que le piège
+est réutilisable, pas parce que les cas particuliers sont intéressants.
+
+**Un `502` n'est pas toujours l'application.** L'API émet des 502 légitimes (`{"detail": "IMAP
+error: …"}`), nginx en émet pendant un redéploiement (page HTML). Le discriminant est le **corps**,
+jamais le code. La suite rend désormais un `Skip` sur un 502 sans corps JSON — sans quoi un
+redémarrage de conteneur se lit comme quatorze régressions produit.
+
+**Un `403` n'a pas toujours la même cause.** « Réservé aux administrateurs » et « chemin hors du
+répertoire autorisé » portent le même code. Les confondre transformait la preuve qu'un correctif
+fonctionne en « non vérifié ».
+
+**Une absence d'effet n'est pas un refus.** C'est le plus coûteux des trois. Un `found: 0` sur un
+dossier déjà vidé, un témoin absent parce que la charge était mal formée, un dossier disparu parce
+que le test l'avait lui-même renommé : dans les trois cas le résultat attendu et le résultat
+redouté se ressemblaient. **Il revient au test de les rendre distinguables** — critère qui ne
+correspond à rien, témoin que seul le défaut peut produire, périmètre manipulé exclu du
+recensement.

@@ -94,6 +94,14 @@ def action_forward():
     """`forward` figurait dans les actions valides mais n'etait pas implementee : la regle
     renvoyait `matched: 1, actions: []` sans rien faire."""
     from ..core import unique
+    # Prerequis : l'envoi doit fonctionner. Sinon le moteur de regles rapporte `failed: 1`
+    # sans en dire la cause, et le test accuse l'action `forward` d'un probleme de transport
+    # — sur un serveur a certificat auto-signe, par exemple. Un test dont le prerequis n'est
+    # pas rempli doit le dire, pas conclure.
+    # `test-smtp` repond 200 meme en echec : c'est `status` qui porte le verdict, pas le code.
+    sonde = (API.post(f"/accounts/{CFG.account_id}/test-smtp").json() or {})
+    if sonde.get("status") == "error":
+        expect(False, f"echec SMTP : {sonde.get('message', '')}")
     marqueur = unique("FWD")
     dossier = work_folder("SMTP05")
     seed(dossier, [{"from": "src@qa-autotest.local", "subject": f"QA-SMTP05 {marqueur}",

@@ -57,7 +57,8 @@ ALLOWED_IDENTITIES = {"qa@mailia.local"}
 # Hotes de messagerie consideres comme jetables. Tout le reste est refuse, en IMAP
 # comme en SMTP : la suite envoie reellement des emails, un relais tiers ferait sortir
 # du courrier depuis une adresse reelle a chaque execution.
-ALLOWED_MAIL_HOSTS = {"greenmail", "localhost", "127.0.0.1", "mailia-greenmail"}
+ALLOWED_MAIL_HOSTS = {"greenmail", "localhost", "127.0.0.1", "mailia-greenmail",
+                      "dovecot", "mailia-dovecot"}
 
 # Motifs qui font echouer immediatement, quelle que soit la liste blanche.
 # Defense redondante et volontaire : si quelqu'un elargit ALLOWED_* par megarde,
@@ -66,6 +67,17 @@ FORBIDDEN_SUBSTRINGS = ("ebusinet", "ovh.net", "pimienta")
 
 # Identite validee par le dernier appel a run_guard(). None tant qu'il n'a pas tourne.
 _IDENTITE_VALIDEE: dict | None = None
+_HOTE_CIBLE: str | None = None
+
+
+def hote_cible() -> str:
+    """Hote IMAP du compte teste, tel que le garde-fou l'a valide.
+
+    Sert a determiner le profil du serveur (permissif ou strict), qui decide si un test de
+    securite peut demontrer quoi que ce soit. Lu ici plutot que redemande a l'API : c'est la
+    valeur que le garde a effectivement autorisee.
+    """
+    return _HOTE_CIBLE or ""
 
 
 def resolved_user_id() -> int:
@@ -170,8 +182,9 @@ def check_accounts(accounts: list[dict], target_id: int) -> dict:
 
 def run_guard() -> dict:
     """Controle complet. Leve GuardError si la suite ne doit pas demarrer."""
-    global _IDENTITE_VALIDEE
+    global _IDENTITE_VALIDEE, _HOTE_CIBLE
     _IDENTITE_VALIDEE = None
+    _HOTE_CIBLE = None
 
     for probleme in CFG.problemes():
         raise GuardError(f"REFUS : configuration inexploitable — {probleme}")
@@ -196,6 +209,7 @@ def run_guard() -> dict:
     comptes = ra.json() or []
     cible = check_accounts(comptes, CFG.account_id)
 
+    _HOTE_CIBLE = (cible.get("imap_host") or "").lower()
     _IDENTITE_VALIDEE = {"id": me["id"], "email": me.get("email")}
     return {
         "identite": me.get("email"),

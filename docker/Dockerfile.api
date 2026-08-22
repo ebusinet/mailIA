@@ -9,6 +9,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Magasin de confiance : le certificat du Dovecot de test n'est installe QUE si le build
+# le demande explicitement. Un build normal produit une image identique a avant.
+# Sans lui, l'application refuse (a juste titre) le certificat auto-signe et les chemins
+# STARTTLS restent non testables. Usage : docker compose build --build-arg TRUST_TEST_CERTS=1
+ARG TRUST_TEST_CERTS=0
+COPY docker/dovecot/ssl/dovecot-test.crt /tmp/dovecot-test.crt
+RUN if [ "$TRUST_TEST_CERTS" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+        cp /tmp/dovecot-test.crt /usr/local/share/ca-certificates/dovecot-test.crt && \
+        update-ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    rm -f /tmp/dovecot-test.crt
+
 COPY src/ src/
 COPY alembic/ alembic/
 COPY alembic.ini .

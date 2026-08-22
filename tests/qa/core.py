@@ -152,6 +152,24 @@ class Response:
         return self.text[:200]
 
 
+def _pas_une_reponse_de_l_application(r: Response, method: str, chemin: str) -> Response:
+    """Distingue une panne de passerelle d'une reponse du produit.
+
+    Pendant un redeploiement, nginx renvoie `502 Bad Gateway` avec une page HTML. Les tests
+    le lisaient comme un refus manquant ou un endpoint casse : une execution a ainsi rapporte
+    six echecs produit qui n'etaient que le conteneur en cours de redemarrage.
+
+    L'application, elle, emet aussi des 502 — mais toujours en JSON
+    (`{"detail": "IMAP error: ..."}`). Le corps est donc le discriminant fiable, pas le code.
+    Un test qui n'a pas pu joindre l'application doit le dire, pas accuser le produit.
+    """
+    if r.status in (502, 503, 504) and r.json() is None:
+        raise Skip(f"passerelle en erreur sur {method} {chemin} : HTTP {r.status} sans corps "
+                   "JSON — l'application n'a pas repondu (redeploiement en cours ?). "
+                   "Ce n'est pas un resultat de test.")
+    return r
+
+
 class Api:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -177,7 +195,8 @@ class Api:
             with urllib.request.urlopen(req, timeout=self.cfg.timeout, context=self._ctx) as r:
                 return Response(r.status, r.read(), Headers(r.headers))
         except urllib.error.HTTPError as e:
-            return Response(e.code, e.read(), Headers(e.headers or {}))
+            return _pas_une_reponse_de_l_application(
+                Response(e.code, e.read(), Headers(e.headers or {})), method, path)
         except urllib.error.URLError as e:
             raise Skip(f"API injoignable ({self.cfg.api_url}) : {e.reason}")
 
@@ -257,16 +276,41 @@ class Container:
         p = subprocess.run(["ssh", "-o", "BatchMode=yes", self.cfg.ssh_host, wrapper],
                            capture_output=True, timeout=self.cfg.timeout + 60, text=True)
         if p.returncode != 0:
-            raise Failure(f"execution conteneur en echec : {(p.stderr or p.stdout)[-300:]}")
+            sortie = (p.stderr or p.stdout)[-300:]
+            # Le conteneur qui redemarre n'est pas un defaut du produit. Meme raisonnement
+            # que pour le 502 de nginx : c'est le message de docker qui distingue, et un
+            # test qui n'a pas pu s'executer doit le dire plutot qu'accuser.
+            if "is not running" in sortie or "No such container" in sortie:
+                raise Skip(f"le conteneur {self.cfg.api_container} ne tourne pas "
+                           "(redeploiement en cours ?) — ce test n'a pas pu s'executer, "
+                           "il n'a rien constate sur le produit.")
+            raise Failure(f"execution conteneur en echec : {sortie}")
         return p.stdout
 
     def imap(self, code: str) -> str:
-        """Execute du code disposant d'une connexion IMAP GreenMail ouverte sous le nom M."""
+        """Execute du code disposant d'une connexion IMAP ouverte sous le nom M.
+
+        La connexion vise le serveur du compte reellement teste, lu dans la base et non
+        code en dur. Avec un hote fixe, lancer la suite sur un second compte ferait
+        recenser le mauvais serveur **en silence** : les tests passeraient ou echoueraient
+        pour des raisons etrangeres au compte sous test.
+
+        Le garde-fou a deja verifie que cet hote est jetable ; on ne se connecte donc
+        jamais ailleurs que sur un serveur de test.
+        """
         prelude = (
             "import imaplib, email.utils, time\n"
             "from email.message import EmailMessage\n"
-            "M = imaplib.IMAP4('greenmail', 3143)\n"
-            "M.login('test', 'testpass123')\n"
+            "from sqlalchemy import create_engine, text\n"
+            "from src.config import get_settings\n"
+            "from src.security import decrypt_value as _dec\n"
+            "_e = create_engine(get_settings().database_url.replace('+asyncpg',''))\n"
+            "with _e.connect() as _c:\n"
+            "    _a = _c.execute(text('SELECT imap_host, imap_port, imap_ssl, imap_user, "
+            f"imap_password_encrypted FROM mail_accounts WHERE id = {CFG.account_id}')"
+            ").first()\n"
+            "M = (imaplib.IMAP4_SSL if _a[2] else imaplib.IMAP4)(_a[0], _a[1])\n"
+            "M.login(_a[3], _dec(_a[4]))\n"
         )
         return self.python(prelude + code + "\ntry:\n    M.logout()\nexcept Exception:\n    pass\n")
 
@@ -314,14 +358,51 @@ class TestCase:
     ref: str
     fn: callable
     group: str
+    serveur: str = "indifferent"
 
 
 REGISTRY: list[TestCase] = []
 
 
-def test(ident: str, title: str, ref: str = "", group: str = ""):
+# Profil de chaque serveur de test. Ce n'est pas une preference : c'est ce qui decide si un
+# test prouve quelque chose.
+#
+#   - Un test de securite qui conclut « aucun temoin cree » doit tourner sur le serveur le
+#     plus PERMISSIF. Sur un serveur strict, la commande injectee est refusee par le serveur
+#     lui-meme : le test passe au vert sans que l'application y soit pour rien.
+#     Mesure a l'appui : ` a2 CREATE X` (ligne precedee d'une espace) donne
+#     `OK CREATE completed` sur GreenMail et `BAD Invalid tag` sur Dovecot.
+#
+#   - Un test fonctionnel qui conclut « la requete marche » doit tourner sur le plus STRICT.
+#     Sur un serveur limite, une requete correcte echoue et dement a tort le correctif.
+#     Mesure a l'appui : la recherche d'un objet accentue aboutit sur Dovecot, pas sur
+#     GreenMail.
+#
+# Les deux faux negatifs vont donc dans des sens opposes, et aucun serveur ne protege des
+# deux. Un test declare ce dont il a besoin ; s'il tourne ailleurs, il le DIT.
+PROFILS_SERVEUR = {
+    "greenmail": "permissif",
+    "mailia-greenmail": "permissif",
+    "dovecot": "strict",
+    "mailia-dovecot": "strict",
+}
+
+
+def profil_serveur() -> str:
+    """Profil du serveur du compte teste, ou 'inconnu' si l'hote n'est pas repertorie."""
+    from .guard import hote_cible
+    return PROFILS_SERVEUR.get((hote_cible() or "").lower(), "inconnu")
+
+
+def test(ident: str, title: str, ref: str = "", group: str = "", serveur: str = "indifferent"):
+    """`serveur` : 'permissif', 'strict' ou 'indifferent' (defaut).
+
+    Un test exigeant un profil precis rend SKIP ailleurs, avec la raison. Il ne passe jamais
+    au vert sur un serveur ou il ne peut rien demontrer.
+    """
     def deco(fn):
-        REGISTRY.append(TestCase(ident, title, ref, fn, group or fn.__module__.rsplit(".", 1)[-1]))
+        REGISTRY.append(TestCase(ident, title, ref, fn,
+                                 group or fn.__module__.rsplit(".", 1)[-1], serveur))
         return fn
     return deco
 
@@ -330,16 +411,44 @@ def test(ident: str, title: str, ref: str = "", group: str = ""):
 # Assertions
 # ---------------------------------------------------------------------------
 
+def _cause_environnement(texte: str) -> None:
+    """Transforme en Skip un echec du au serveur de test plutot qu'au produit.
+
+    Un serveur jetable presente souvent un certificat auto-signe. L'application le refuse,
+    et c'est le bon comportement — mais plus aucun envoi n'aboutit. Ce n'est la propriete
+    d'aucun test : le compter comme un echec rendrait rouges cinq tests d'envoi sur un
+    serveur ou ils ne peuvent simplement pas s'executer.
+
+    Applique a `expect` **et** a `expect_status`, sans quoi la meme cause produirait un SKIP
+    pour les tests qui verifient un code HTTP et un FAIL pour ceux qui verifient un effet —
+    incoherence constatee en conditions reelles.
+    """
+    if "CERTIFICATE_VERIFY_FAILED" in (texte or ""):
+        raise Skip(
+            "le serveur de messagerie de test presente un certificat auto-signe, que "
+            "l'application refuse — a juste titre. L'envoi ne peut pas aboutir ici : ce "
+            "test n'a pas pu s'executer, il n'a rien constate sur le produit. Ce SKIP est "
+            "PERMANENT sur cette instance : ajouter le certificat de test au magasin de "
+            "confiance de `mailia-api` est refuse deliberement, ce conteneur detenant les "
+            "identifiants IMAP du compte professionnel reel alors que la cle privee de "
+            "l'autorite de test est versionnee dans le depot. Ces chemins d'envoi se "
+            "verifient sur le serveur permissif.")
+
+
 def expect(condition, message: str):
-    if not condition:
-        raise Failure(message)
+    if condition:
+        return
+    _cause_environnement(message)
+    raise Failure(message)
 
 
 def expect_status(resp: Response, expected, message: str = ""):
     exp = expected if isinstance(expected, (list, tuple, set)) else [expected]
-    if resp.status not in exp:
-        raise Failure(f"{message or 'code HTTP inattendu'} : attendu {exp}, obtenu "
-                      f"{resp.status} — {resp.detail[:160]}")
+    if resp.status in exp:
+        return
+    _cause_environnement(resp.detail)
+    raise Failure(f"{message or 'code HTTP inattendu'} : attendu {exp}, obtenu "
+                  f"{resp.status} — {resp.detail[:160]}")
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +474,8 @@ def unique(prefix: str = "QA") -> str:
 def build_mbox(messages: list[dict]) -> bytes:
     """Construit un mbox en memoire.
 
-    Chaque message : {from, subject, body, date (YYYY-MM-DD HH:MM:SS), to?, cc?, headers?}
+    Chaque message : {from, subject, body, date (YYYY-MM-DD HH:MM:SS), to?, cc?, headers?,
+    message_id?}
     L'import mbox est le seul moyen purement HTTP de deposer un message dans un dossier
     IMAP precis avec des en-tetes maitrises.
     """
@@ -381,7 +491,11 @@ def build_mbox(messages: list[dict]) -> bytes:
             lines.append(f"Cc: {m['cc']}")
         lines.append(f"Subject: {m['subject']}")
         lines.append(f"Date: {email.utils.formatdate(ts, localtime=True)}")
-        lines.append(f"Message-ID: <{uuid.uuid4().hex}@qa-autotest.local>")
+        # `message_id` permet de maitriser l'en-tete au lieu de le laisser genere : c'est
+        # necessaire pour exercer un Message-ID replie (RFC 5322), vecteur d'injection reel
+        # puisque cet en-tete est ecrit par l'expediteur du message.
+        lines.append("Message-ID: " + m.get("message_id",
+                                            f"<{uuid.uuid4().hex}@qa-autotest.local>"))
         for k, v in (m.get("headers") or {}).items():
             lines.append(f"{k}: {v}")
         lines.append("Content-Type: text/plain; charset=utf-8")
