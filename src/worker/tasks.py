@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from src.worker.app import app
@@ -14,7 +15,7 @@ from src.db.models import MailAccount, AIRule, ClassicRule, ProcessingLog, User,
 from src.imap.manager import IMAPManager, IMAPConfig, _decode_imap_utf7
 from src.search.indexer import get_es_client, ensure_index, index_email, bulk_index_emails
 from src.rules.parser import parse_rules_markdown
-from src.rules.engine import evaluate_rules, EmailContext
+from src.rules.engine import evaluate_rules, EmailContext, AIProviderTimeout
 from src.ai.router import get_llm_for_user
 from src.security import decrypt_value
 from src.config import get_settings
@@ -47,29 +48,71 @@ async def _worker_session():
         await engine.dispose()
 
 
+SYNC_LOCK_TTL = 2100  # must outlive task_time_limit (1800) so a SIGKILLed task still frees the lock
+SYNC_TASK_EXPIRES = 240  # a dispatched sync not picked up before the next cycle is pointless
+MAX_AI_TIMEOUTS = 3  # consecutive provider timeouts before AI rules are dropped for the cycle
+
+
+def _sync_lock_key(account_id: int) -> str:
+    return f"mailia:lock:sync_account:{account_id}"
+
+
+def _uid_still_present(imap, uid: str) -> bool:
+    """After fetch_email() returned None, tell a vanished message from a failed fetch.
+
+    fetch_email() returns None both when the server answers NO and when the UID no
+    longer exists. Skipping the first case loses the email for good; blocking on the
+    second would stall the folder forever. The folder is already selected by the fetch.
+    """
+    try:
+        status, data = imap._conn.uid("SEARCH", None, f"UID {uid}")
+    except Exception:
+        return True  # cannot tell — assume it is still there and retry next cycle
+    return status == "OK" and bool(data and data[0].split())
+
+
 @app.task(name="src.worker.tasks.sync_all_accounts")
 def sync_all_accounts():
-    """Periodic task: sync all active mail accounts."""
-    _run_async(_sync_all_accounts())
+    """Periodic task: dispatch one sync task per active account.
+
+    Dispatching rather than syncing inline keeps the per-task time limit scoped to a
+    single account, so one slow mailbox cannot starve the others.
+    """
+    _run_async(_dispatch_account_syncs())
 
 
-async def _sync_all_accounts():
+async def _dispatch_account_syncs():
     async with _worker_session() as db:
         result = await db.execute(
-            select(MailAccount).where(MailAccount.sync_enabled.is_(True))
+            select(MailAccount.id).where(MailAccount.sync_enabled.is_(True))
         )
-        accounts = result.scalars().all()
-        for account in accounts:
-            try:
-                await _sync_account(db, account)
-            except Exception as e:
-                logger.error(f"Sync failed for account {account.id} ({account.name}): {e}")
+        account_ids = [row[0] for row in result.all()]
+    for account_id in account_ids:
+        sync_account.apply_async((account_id,), expires=SYNC_TASK_EXPIRES)
+    logger.info(f"Dispatched sync for {len(account_ids)} account(s)")
 
 
 @app.task(name="src.worker.tasks.sync_account")
 def sync_account(account_id: int):
-    """Sync a specific mail account."""
-    _run_async(_sync_account_by_id(account_id))
+    """Sync a specific mail account, guarded by a per-account Redis lock.
+
+    A sync cycle can outlast the 5-minute schedule; overlapping runs on the same
+    mailbox would fight over the same UIDs.
+    """
+    import redis
+
+    client = redis.from_url(get_settings().redis_url)
+    key = _sync_lock_key(account_id)
+    if not client.set(key, "1", nx=True, ex=SYNC_LOCK_TTL):
+        logger.info(f"Account {account_id} already syncing, skipping")
+        return
+    try:
+        _run_async(_sync_account_by_id(account_id))
+    finally:
+        try:
+            client.delete(key)
+        except Exception:
+            pass
 
 
 async def _sync_account_by_id(account_id: int):
@@ -91,155 +134,206 @@ async def _sync_account(db, account: MailAccount):
     )
 
     es = await get_es_client()
-    await ensure_index(es, account.user_id)
-
-    # Get user's active AI rules
-    rules_result = await db.execute(
-        select(AIRule).where(
-            AIRule.user_id == account.user_id,
-            AIRule.is_active.is_(True),
-        ).order_by(AIRule.priority)
-    )
-    ai_rules = rules_result.scalars().all()
-    parsed_rules = []
-    for ar in ai_rules:
-        parsed_rules.extend(parse_rules_markdown(ar.rules_markdown))
-
-    # Get LLM if rules need AI
-    llm = None
-    needs_ai = any(r.condition.needs_ai for r in parsed_rules)
-    if needs_ai:
-        try:
-            user_result = await db.execute(select(User).where(User.id == account.user_id))
-            user = user_result.scalar_one()
-            llm = await get_llm_for_user(db, user)
-        except Exception as e:
-            logger.warning(f"Could not get LLM for user {account.user_id}: {e}")
-
-    # Get user's active classic rules
-    classic_result = await db.execute(
-        select(ClassicRule).where(
-            ClassicRule.user_id == account.user_id,
-            ClassicRule.is_active.is_(True),
-        ).order_by(ClassicRule.priority)
-    )
-    classic_rules = classic_result.scalars().all()
-
-    # Load spam whitelist/blacklist for classic rule evaluation
-    wl_set = set()
-    bl_set = set()
-    if classic_rules:
-        wl_result = await db.execute(
-            select(SpamWhitelist).where(SpamWhitelist.account_id == account.id)
-        )
-        wl_set = {e.value for e in wl_result.scalars().all()}
-        bl_result = await db.execute(
-            select(SpamBlacklist).where(SpamBlacklist.account_id == account.id)
-        )
-        bl_set = {e.value for e in bl_result.scalars().all()}
-
-    # Per-folder UID tracking (replaces UNKEYWORD which OVH doesn't support)
-    sync_state = dict(account.sync_state or {})
-
-    imap = IMAPManager(config)
-    imap.connect()
-
     try:
-        folder_entries = imap.list_folders()
+        await ensure_index(es, account.user_id)
 
-        BATCH_SIZE = 50  # emails fetched from IMAP per batch
-        MAX_PER_FOLDER = 2000  # max emails per folder per sync cycle
+        # Get user's active AI rules
+        rules_result = await db.execute(
+            select(AIRule).where(
+                AIRule.user_id == account.user_id,
+                AIRule.is_active.is_(True),
+            ).order_by(AIRule.priority)
+        )
+        ai_rules = rules_result.scalars().all()
+        parsed_rules = []
+        for ar in ai_rules:
+            parsed_rules.extend(parse_rules_markdown(ar.rules_markdown))
 
-        for entry in folder_entries:
-            imap_folder = entry["name"] if isinstance(entry, dict) else entry
-            display_folder = entry.get("display_name", imap_folder) if isinstance(entry, dict) else imap_folder
-            folder = imap_folder  # Use IMAP UTF-7 name for IMAP operations
+        # Get LLM if rules need AI
+        llm = None
+        needs_ai = any(r.condition.needs_ai for r in parsed_rules)
+        if needs_ai:
             try:
-                last_uid = sync_state.get(folder)
-                uids = imap.get_uids(folder, since_uid=last_uid)
-                if not uids:
-                    continue
+                user_result = await db.execute(select(User).where(User.id == account.user_id))
+                user = user_result.scalar_one()
+                llm = await get_llm_for_user(db, user)
+            except Exception as e:
+                logger.warning(f"Could not get LLM for user {account.user_id}: {e}")
 
-                # Process oldest first so sync_state advances progressively
-                uids_to_process = uids[:MAX_PER_FOLDER]
-                logger.info(f"Account {account.name}: {len(uids)} pending in {folder}, processing {len(uids_to_process)}")
+        # Get user's active classic rules
+        classic_result = await db.execute(
+            select(ClassicRule).where(
+                ClassicRule.user_id == account.user_id,
+                ClassicRule.is_active.is_(True),
+            ).order_by(ClassicRule.priority)
+        )
+        classic_rules = classic_result.scalars().all()
 
-                # Process in batches for bulk ES indexing
-                for batch_start in range(0, len(uids_to_process), BATCH_SIZE):
-                    batch_uids = uids_to_process[batch_start:batch_start + BATCH_SIZE]
-                    batch_contexts = []
+        # Load spam whitelist/blacklist for classic rule evaluation
+        wl_set = set()
+        bl_set = set()
+        if classic_rules:
+            wl_result = await db.execute(
+                select(SpamWhitelist).where(SpamWhitelist.account_id == account.id)
+            )
+            wl_set = {e.value for e in wl_result.scalars().all()}
+            bl_result = await db.execute(
+                select(SpamBlacklist).where(SpamBlacklist.account_id == account.id)
+            )
+            bl_set = {e.value for e in bl_result.scalars().all()}
 
-                    for uid in batch_uids:
-                        try:
-                            email_ctx = imap.fetch_email(uid, folder)
-                            if email_ctx:
-                                email_ctx.folder = display_folder  # Store UTF-8 in ES
-                                batch_contexts.append(email_ctx)
-                        except Exception as e:
-                            logger.error(f"Error fetching UID {uid} in {folder}: {e}")
+        # Per-folder UID tracking (replaces UNKEYWORD which OVH doesn't support)
+        sync_state = dict(account.sync_state or {})
 
-                    # Bulk index the batch
-                    if batch_contexts:
-                        try:
-                            await bulk_index_emails(es, account.user_id, account.id, batch_contexts)
-                        except Exception as e:
-                            logger.error(f"Bulk index error in {folder}: {e}")
-                            # Fallback to individual indexing
+        ai_timeouts = 0  # circuit breaker: stop calling a provider that keeps timing out
+
+        imap = IMAPManager(config)
+        imap.connect()
+
+        try:
+            folder_entries = imap.list_folders()
+
+            BATCH_SIZE = 50  # emails fetched from IMAP per batch
+            MAX_PER_FOLDER = 2000  # max emails per folder per sync cycle
+
+            for entry in folder_entries:
+                imap_folder = entry["name"] if isinstance(entry, dict) else entry
+                display_folder = entry.get("display_name", imap_folder) if isinstance(entry, dict) else imap_folder
+                folder = imap_folder  # Use IMAP UTF-7 name for IMAP operations
+                try:
+                    last_uid = sync_state.get(folder)
+                    uids = imap.get_uids(folder, since_uid=last_uid)
+                    if not uids:
+                        continue
+
+                    # Process oldest first so sync_state advances progressively
+                    uids_to_process = uids[:MAX_PER_FOLDER]
+                    logger.info(f"Account {account.name}: {len(uids)} pending in {folder}, processing {len(uids_to_process)}")
+
+                    # Process in batches for bulk ES indexing
+                    for batch_start in range(0, len(uids_to_process), BATCH_SIZE):
+                        batch_uids = uids_to_process[batch_start:batch_start + BATCH_SIZE]
+                        batch_contexts = []
+                        # The cursor is committed per batch, so it may only move over UIDs
+                        # that were really fetched and indexed: committing past a failed UID
+                        # would skip that email for good (get_uids only returns UID > cursor).
+                        cursor_uid = None
+                        batch_complete = True
+
+                        for uid in batch_uids:
+                            try:
+                                email_ctx = imap.fetch_email(uid, folder)
+                                if email_ctx:
+                                    email_ctx.folder = display_folder  # Store UTF-8 in ES
+                                    batch_contexts.append(email_ctx)
+                                elif _uid_still_present(imap, uid):
+                                    logger.error(f"Fetch returned nothing for UID {uid} in {folder} while it still exists")
+                                    batch_complete = False
+                                if batch_complete:
+                                    cursor_uid = uid
+                            except SoftTimeLimitExceeded:
+                                raise
+                            except Exception as e:
+                                logger.error(f"Error fetching UID {uid} in {folder}: {e}")
+                                batch_complete = False
+
+                        # Bulk index the batch
+                        if batch_contexts:
+                            try:
+                                await bulk_index_emails(es, account.user_id, account.id, batch_contexts)
+                            except SoftTimeLimitExceeded:
+                                raise
+                            except Exception as e:
+                                logger.error(f"Bulk index error in {folder}: {e}")
+                                # Fallback to individual indexing
+                                for ctx in batch_contexts:
+                                    try:
+                                        await index_email(es, account.user_id, account.id, ctx)
+                                    except SoftTimeLimitExceeded:
+                                        raise
+                                    except Exception as ie:
+                                        logger.error(f"Index error for UID {ctx.uid} in {folder}: {ie}")
+                                        batch_complete = False
+                                        cursor_uid = None
+
+                        # Apply AI rules
+                        if parsed_rules:
                             for ctx in batch_contexts:
                                 try:
-                                    await index_email(es, account.user_id, account.id, ctx)
-                                except Exception:
-                                    pass
+                                    matches = await evaluate_rules(ctx, parsed_rules, llm)
+                                    for match in matches:
+                                        await _execute_actions(imap, db, account, ctx, match)
+                                except SoftTimeLimitExceeded:
+                                    raise
+                                except AIProviderTimeout:
+                                    ai_timeouts += 1
+                                    if ai_timeouts >= MAX_AI_TIMEOUTS:
+                                        logger.error(
+                                            f"AI provider unreachable after {ai_timeouts} timeouts — "
+                                            f"disabling AI rules for account {account.name} this cycle"
+                                        )
+                                        llm = None
+                                except Exception as e:
+                                    logger.error(f"Rule error for UID {ctx.uid} in {folder}: {e}")
 
-                    # Apply AI rules
-                    if parsed_rules:
-                        for ctx in batch_contexts:
+                        # Apply classic rules
+                        if classic_rules:
                             try:
-                                matches = await evaluate_rules(ctx, parsed_rules, llm)
-                                for match in matches:
-                                    await _execute_actions(imap, db, account, ctx, match)
-                            except Exception as e:
-                                logger.error(f"Rule error for UID {ctx.uid} in {folder}: {e}")
-
-                    # Apply classic rules
-                    if classic_rules:
-                        try:
-                            from src.api.routes.rules import apply_classic_rules_on_sync
-                            result = apply_classic_rules_on_sync(
-                                imap, folder, batch_uids, classic_rules,
-                                whitelist=wl_set, blacklist=bl_set,
-                            )
-                            if result["matched"]:
-                                logger.info(
-                                    f"Classic rules: {result['matched']} matched, "
-                                    f"{result['actions_taken']} actions in {folder}"
+                                from src.api.routes.rules import apply_classic_rules_on_sync
+                                result = apply_classic_rules_on_sync(
+                                    imap, folder, batch_uids, classic_rules,
+                                    whitelist=wl_set, blacklist=bl_set, account=account,
                                 )
-                        except Exception as e:
-                            logger.error(f"Classic rule error in {folder}: {e}")
+                                if result["matched"]:
+                                    logger.info(
+                                        f"Classic rules: {result['matched']} matched, "
+                                        f"{result['actions_taken']} actions in {folder}"
+                                    )
+                            except SoftTimeLimitExceeded:
+                                raise
+                            except Exception as e:
+                                logger.error(f"Classic rule error in {folder}: {e}")
 
-                    # Save progress after each batch
-                    sync_state[folder] = batch_uids[-1]
+                        # Persist after each batch: a hard time limit SIGKILLs the worker,
+                        # so anything only held in memory here would be redone from scratch.
+                        if cursor_uid is not None:
+                            sync_state[folder] = cursor_uid
+                            account.sync_state = dict(sync_state)  # reassign: in-place JSON mutation is not tracked
+                            account.last_sync_at = datetime.utcnow()
+                            await db.commit()
 
-            except (ConnectionError, OSError, imaplib.IMAP4.abort) as e:
-                logger.warning(f"IMAP connection lost at folder {folder}: {e}")
-                try:
-                    imap.disconnect()
-                    imap.connect()
-                except Exception:
-                    logger.error(f"Failed to reconnect IMAP for account {account.name}")
-                    break
+                        if not batch_complete:
+                            # Stop this folder here. Carrying on would commit a later batch's
+                            # cursor and jump over the UIDs that just failed.
+                            logger.warning(
+                                f"{folder}: batch at UID {batch_uids[0]} incomplete, cursor left at "
+                                f"{sync_state.get(folder)} — remaining UIDs retried next cycle"
+                            )
+                            break
 
-            except Exception as e:
-                logger.error(f"Error processing folder {folder}: {e}")
+                except (ConnectionError, OSError, imaplib.IMAP4.abort) as e:
+                    logger.warning(f"IMAP connection lost at folder {folder}: {e}")
+                    try:
+                        imap.disconnect()
+                        imap.connect()
+                    except Exception:
+                        logger.error(f"Failed to reconnect IMAP for account {account.name}")
+                        break
 
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error processing folder {folder}: {e}")
+
+        finally:
+            imap.disconnect()
+
+        # Persist sync state
+        account.sync_state = sync_state
+        account.last_sync_at = datetime.utcnow()
+        await db.commit()
     finally:
-        imap.disconnect()
-
-    # Persist sync state
-    account.sync_state = sync_state
-    account.last_sync_at = datetime.utcnow()
-    await db.commit()
-    await es.close()
+        await es.close()
 
 
 async def _execute_actions(imap, db, account, email_ctx: EmailContext, match):
