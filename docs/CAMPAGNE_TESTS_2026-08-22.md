@@ -296,6 +296,39 @@ l'image, couverts par un test qui s'annonce lui-même comme non exécutable.
 Un test ignoré ne protège rien, et cet angle mort s'élargit à chaque lot. C'est aujourd'hui le
 principal écart entre ce qui est corrigé et ce qui est vérifié.
 
+### 7.0bis Où atterrissent vos suppressions ? (question ouverte, réponse gratuite)
+
+Deux dossiers de corbeille coexistent sur le compte professionnel :
+
+| Dossier | Messages |
+|---|---|
+| `Trash` | **18 992** |
+| `Éléments supprimés` | 1 568 |
+
+MailIA cherchait la corbeille dans une liste de noms codés en dur qui contient `Trash` mais **pas**
+`Éléments supprimés`. Il déposait donc dans `Trash`. Si votre client de messagerie affiche
+`Éléments supprimés` comme corbeille — ce que le nom français sur un serveur OVH rend probable —
+alors les emails supprimés depuis MailIA atterrissent depuis toujours dans un dossier que vous ne
+regardez jamais. Ce qui expliquerait l'écart entre les deux volumes.
+
+Ce n'est pas un effet du correctif : c'est un défaut antérieur que le correctif **révèle**.
+Désormais le drapeau protocolaire `\Trash` prime sur la liste de noms, donc :
+
+- si `Éléments supprimés` porte ce drapeau, vos suppressions y iront — c'est-à-dire là où vous les
+  cherchez. Correction d'un défaut ancien, pas régression ;
+- sinon, rien ne change et `Trash` reste utilisé. Le défaut ancien subsiste et demande un
+  traitement séparé.
+
+**Comment trancher sans rien installer** : supprimer un email depuis MailIA, puis lire les logs.
+`move_email` journalise déjà la destination réelle.
+
+```bash
+ssh expert-presta "docker logs mailia-api --tail 50 | grep 'Moved UID'"
+```
+
+La ligne indiquera le dossier de destination effectif. Une suppression, une commande, et la
+question est réglée.
+
 ### 7.1 Redémarrer le worker et le planificateur
 
 Les correctifs anti-blocage sont prêts et déployés dans l'image, mais **le worker n'a pas été
