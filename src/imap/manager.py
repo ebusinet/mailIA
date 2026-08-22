@@ -186,12 +186,15 @@ class IMAPManager:
         # les UID etant propres a chaque boite. Qui ajoute un pool doit d'abord proteger
         # ce marqueur, ou retirer `reutiliser_selection`.
         #
-        # Un pool casse AUSSI la protection de fait sur les deplacements concurrents. Deux
-        # requetes dupliquent un message des que le SELECT de l'une precede le MOVE de
-        # l'autre : la fenetre mesuree vaut ~6 ms, et l'API n'espace ses requetes de ~200 ms
-        # que grace au preambule (TLS, HTTP, connexion et login IMAP). Un pool supprime
-        # precisement ce preambule. Le verrou applicatif, ecarte aujourd'hui faute de cas
-        # atteignable, deviendrait alors necessaire.
+        # Un pool casse AUSSI la protection de fait sur les deplacements concurrents.
+        # Fenetre mesuree sur Dovecot : deux UID MOVE dupliquent le message s'ils partent
+        # a moins de ~0,5 ms l'un de l'autre, plus jamais au-dela de 1 ms — c'est la duree
+        # de la commande elle-meme, pas celle de l'instantane de session (une session qui
+        # garde sa vue 10 s ne duplique pas). Aujourd'hui l'API espace ses requetes d'une
+        # dizaine de millisecondes grace au preambule (TLS, HTTP, connexion et login IMAP) :
+        # une marge d'un facteur dix environ. Un pool supprime ce preambule et peut amener
+        # deux requetes a moins d'une milliseconde. Le verrou applicatif, ecarte aujourd'hui
+        # faute de cas atteignable, deviendrait alors necessaire.
         self._selection: tuple[str, bool] | None = None
         self._capacites: set[str] = set()
 

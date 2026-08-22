@@ -460,26 +460,36 @@ ferme pas la course : **mesurée à 0/6 duplications sur un serveur et 6/6 sur l
 comme commande, pas comme transaction — chaque session garde sa vue jusqu'à la notification de
 suppression.
 
-### Où se trouve exactement la fenêtre, et pourquoi elle est hors d'atteinte
+### La fenêtre, bornée par la mesure après deux modèles faux
 
-La fenêtre n'est pas la durée de la commande, mais **l'intervalle entre l'ouverture du dossier et
-l'opération** : dès qu'une session a ouvert le dossier, elle détient un instantané où le message
-existe, et elle le croira présent jusqu'à recevoir la notification de suppression — même vingt
-millisecondes plus tard.
+Deux explications successives ont été proposées et écartées — « les commandes sont désalignées »,
+puis « la fenêtre est l'intervalle entre l'ouverture du dossier et l'opération ». Toutes deux
+étaient cohérentes et construites sur des données réelles ; c'est ce qui les rendait crédibles.
 
-| | |
-|---|---|
-| Fenêtre de course mesurée | **~6 ms** |
-| Espacement naturel de deux requêtes par l'API | **~200 ms** |
-| Marge | **facteur 30** |
+La seconde a été réfutée par un essai direct : une session gardant son instantané **dix secondes**
+pendant qu'une autre déplace le message ne produit **aucune duplication**. Le serveur refuse
+correctement une opération sur un message déjà retiré par une autre session, sans avoir eu besoin
+de la notifier.
 
-Le défaut n'est donc ni fermé ni ouvert : il est **inatteignable par un facteur trente, et ce
-facteur est le coût du préambule** — connexion, authentification, ouverture de session IMAP.
+La fenêtre a donc été bornée en décalant délibérément la seconde requête :
 
-Ce qui donne le déclencheur exact plutôt qu'une inquiétude vague : **un pool de connexions
-supprimerait précisément ce préambule.** Il rendrait la fenêtre atteignable, et casserait au passage
-la sûreté de la réutilisation de sélection. Les deux risques ont la même cause et le même
-avertissement dans le code.
+| Écart entre les deux opérations | 0 ms | 0,2 ms | 0,5 ms | 1 ms | 2 ms | 20 ms |
+|---|---|---|---|---|---|---|
+| Duplications | 5/5 | 5/5 | 5/5 | **0/5** | 0/5 | 0/5 |
+
+> **La fenêtre fait moins d'une milliseconde** — c'est la durée de la commande elle-même.
+
+Contre un espacement naturel d'une dizaine de millisecondes entre deux requêtes voisines de l'API,
+soit une marge d'environ **un facteur dix**.
+
+Le défaut n'est donc ni fermé ni ouvert : il est hors d'atteinte, mais d'un facteur beaucoup plus
+faible qu'estimé, et ce facteur est le coût du préambule — connexion, authentification, ouverture
+de session.
+
+D'où le déclencheur, précis et vérifiable : **un pool de connexions supprime ce préambule et peut
+amener deux requêtes à moins d'une milliseconde l'une de l'autre.** Il rendrait la fenêtre
+atteignable et casserait au passage la sûreté de la réutilisation de sélection — deux risques, une
+seule cause, un seul avertissement dans le code.
 - Et déplacer un message inexistant répond « déplacé » — donc dans une course, **les deux clients
   reçoivent un succès alors qu'un seul a agi**.
 
