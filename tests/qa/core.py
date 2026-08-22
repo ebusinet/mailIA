@@ -176,7 +176,8 @@ class Api:
         self._ctx = ssl.create_default_context()
 
     def request(self, method: str, path: str, *, params=None, json_body=None,
-                body: bytes = None, content_type: str = None, token: str = "__default__") -> Response:
+                body: bytes = None, content_type: str = None, token: str = "__default__",
+                en_tetes: dict | None = None) -> Response:
         url = self.cfg.api_url + path
         if params:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
@@ -190,6 +191,10 @@ class Api:
         tok = self.cfg.token if token == "__default__" else token
         if tok:
             headers["Authorization"] = f"Bearer {tok}"
+        # En-tetes arbitraires : necessaires pour sonder ce que l'application deduit d'un
+        # en-tete fourni par le client (`X-Forwarded-For` comme cle de limitation de debit).
+        for k, v in (en_tetes or {}).items():
+            headers[k] = v
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.cfg.timeout, context=self._ctx) as r:

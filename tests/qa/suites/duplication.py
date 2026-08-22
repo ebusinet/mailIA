@@ -18,6 +18,23 @@ from __future__ import annotations
 from ..core import (API, CFG, count_in, empty_folder, expect, expect_status,
                     messages_in, premier, seed, test, work_folder)
 
+def _variation(avant: int, apres: int, contexte: str = "") -> str:
+    """Decrit dans quel SENS le total a bouge, au lieu de presumer la duplication.
+
+    Ces tests surveillent une conservation — `total_avant == total_apres` — et non l'absence
+    de duplication. L'invariant attrape donc les deux violations : le total qui augmente
+    (duplication, `F-02`) et le total qui diminue (perte de donnees).
+
+    Le libelle a longtemps annonce « DUPLICATION » dans les deux cas. Quand A-18 a fait
+    disparaitre des messages, le message affichait « DUPLICATION : total 3 -> 2 » : la
+    detection etait juste, le nom faux, et j'ai d'abord conclu a un defaut de mon test.
+    Un message doit decrire ce qu'il a mesure, pas ce qu'il s'attendait a trouver.
+    """
+    quoi = "DUPLICATION" if apres > avant else "PERTE DE DONNEES"
+    suffixe = f" {contexte}" if contexte else ""
+    return f"{quoi}{suffixe} : total {avant} -> {apres}"
+
+
 
 def _espaces(ident: str) -> tuple[str, str]:
     """Paire source/destination exclusive au test.
@@ -52,7 +69,7 @@ def move_sans_duplication():
     expect(src1 == src0 - 1, f"la source n'a pas diminue : {src0} -> {src1} (email non retire)")
     expect(dst1 == dst0 + 1, f"la destination n'a pas augmente : {dst0} -> {dst1}")
     expect((src1 + dst1) == (src0 + dst0),
-           f"DUPLICATION : total {src0 + dst0} -> {src1 + dst1}")
+           _variation(src0 + dst0, src1 + dst1))
 
 
 @test("DUP-02", "Un deplacement vers une cible vide ne detruit pas l'email", "IT4-01")
@@ -97,7 +114,7 @@ def delete_sans_duplication():
     src1, trash1 = count_in(SRC, marker=mk), count_in("Trash", marker=mk)
     expect(src1 == src0 - 1, f"l'email n'a pas ete retire de la source : {src0} -> {src1}")
     expect((src1 + trash1) == (src0 + trash0),
-           f"DUPLICATION : total {src0 + trash0} -> {src1 + trash1}")
+           _variation(src0 + trash0, src1 + trash1))
 
 
 @test("DUP-04", "La suppression en masse ne duplique pas", "F-02")
@@ -114,7 +131,7 @@ def delete_bulk_sans_duplication():
     src1, trash1 = count_in(SRC, marker=mk), count_in("Trash", marker=mk)
     expect(src1 == src0 - 2, f"les emails n'ont pas ete retires : {src0} -> {src1}")
     expect((src1 + trash1) == (src0 + trash0),
-           f"DUPLICATION : total {src0 + trash0} -> {src1 + trash1}")
+           _variation(src0 + trash0, src1 + trash1))
 
 
 @test("DUP-05", "Les flags sont reellement poses et retires", "F-02")
@@ -159,7 +176,7 @@ def mcp_move_delete_sans_duplication():
     expect("__erreur__" not in r, f"move_email a echoue : {r}")
     src1, dst1 = count_in(SRC, marker=mk), count_in(DST, marker=mk)
     expect((src1 + dst1) == (src0 + dst0),
-           f"DUPLICATION (move_email) : total {src0 + dst0} -> {src1 + dst1}")
+           _variation(src0 + dst0, src1 + dst1, "(move_email)"))
     expect(src1 == src0 - 1, f"move_email n'a pas retire l'original : {src0} -> {src1}")
 
     uid2 = premier(messages_in(SRC, marker=mk), "duplication")["uid"]
@@ -167,4 +184,4 @@ def mcp_move_delete_sans_duplication():
     expect("__erreur__" not in r, f"delete_email a echoue : {r}")
     src2, trash2 = count_in(SRC, marker=mk), count_in("Trash", marker=mk)
     expect((src2 + trash2) == (src1 + trash0),
-           f"DUPLICATION (delete_email) : total {src1 + trash0} -> {src2 + trash2}")
+           _variation(src1 + trash0, src2 + trash2, "(delete_email)"))

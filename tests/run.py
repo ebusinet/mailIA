@@ -34,7 +34,7 @@ from qa.core import (BOX, CFG, REGISTRY, Failure, GuardError,  # noqa: E402
 from qa.guard import run_guard  # noqa: E402
 from qa.suites import (duplication, emails, guard_selftest,  # noqa: E402,F401
                        isolation, misc, robustesse, rules_and_storage,
-                       search, smtp_paths)
+                       search, securite, smtp_paths)
 
 VERT, ROUGE, JAUNE, GRIS, GRAS, RAZ = (
     ("\033[32m", "\033[31m", "\033[33m", "\033[90m", "\033[1m", "\033[0m")
