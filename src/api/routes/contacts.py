@@ -150,8 +150,9 @@ async def update_contact(
         contact.ai_directives = req.ai_directives if req.ai_directives else None
     if req.notes is not None:
         contact.notes = req.notes if req.notes else None
-    if req.signature_id is not None:
-        contact.signature_id = req.signature_id if req.signature_id != 0 else None
+    # model_fields_set distinguishes an explicit null (detach) from an omitted field
+    if "signature_id" in req.model_fields_set:
+        contact.signature_id = req.signature_id or None
     if req.group_ids is not None:
         groups = (await db.execute(
             select(ContactGroup).where(
@@ -276,8 +277,8 @@ async def update_group(
         group.name = req.name
     if req.ai_directives is not None:
         group.ai_directives = req.ai_directives if req.ai_directives else None
-    if req.signature_id is not None:
-        group.signature_id = req.signature_id if req.signature_id != 0 else None
+    if "signature_id" in req.model_fields_set:
+        group.signature_id = req.signature_id or None
 
     await db.commit()
     await db.refresh(group)

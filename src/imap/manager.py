@@ -6,6 +6,7 @@ import imaplib
 import email
 import email.utils
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -14,6 +15,21 @@ from src.rules.engine import EmailContext
 logger = logging.getLogger(__name__)
 
 PROCESSED_FLAG = "X-MailIA-Processed"
+
+
+class FolderNotSelectable(Exception):
+    """SELECT refused the mailbox — it does not exist, or cannot be opened."""
+
+
+class InvalidFolderName(ValueError):
+    """A blank target would destroy mail: GreenMail answers OK to `COPY <uid> ""`
+    and discards the message, so no status check downstream can catch it."""
+
+
+def _check_target(folder: str, quoi: str = "target folder") -> str:
+    if not isinstance(folder, str) or not folder.strip():
+        raise InvalidFolderName(f"{quoi} is empty — refusing, this would destroy the message")
+    return folder
 
 
 def _imap_quote(folder: str) -> str:
@@ -97,9 +113,21 @@ class IMAPManager:
                     })
         return folders
 
+    def _select(self, folder: str, readonly: bool = False):
+        """SELECT a mailbox, failing loudly.
+
+        imaplib drops back to AUTH state when SELECT fails, so the *next* command dies
+        with "illegal in state AUTH" — a message that names neither the folder nor the
+        real cause. Every mutating path goes through here to get a usable error.
+        """
+        typ, data = self._conn.select(_imap_quote(folder), readonly=readonly)
+        if typ != "OK":
+            raise FolderNotSelectable(f"Cannot open folder '{folder}' — check that it exists")
+        return data
+
     def get_uids(self, folder: str = "INBOX", since_uid: str | None = None) -> list[str]:
         """Get message UIDs in a folder, optionally since a given UID."""
-        self._conn.select(_imap_quote(folder), readonly=True)
+        self._select(folder, readonly=True)
         if since_uid:
             criteria = f"UID {int(since_uid) + 1}:*"
             status, data = self._conn.uid("SEARCH", None, criteria)
@@ -112,11 +140,18 @@ class IMAPManager:
         # Filter out UIDs <= since_uid (IMAP search can return the boundary)
         if since_uid:
             uids = [u for u in uids if int(u) > int(since_uid)]
-        return uids
+        # RFC 3501 does not guarantee SEARCH ordering, and callers advance their
+        # sync cursor to the last UID of a batch — an unsorted reply would skip mail
+        return sorted(uids, key=int)
 
     def fetch_email(self, uid: str, folder: str = "INBOX") -> EmailContext | None:
-        """Fetch and parse a single email by UID."""
-        self._conn.select(_imap_quote(folder), readonly=True)
+        """Fetch and parse a single email by UID. None if the folder or the UID is gone."""
+        # An unchecked SELECT leaves the connection in AUTH state and the FETCH then
+        # fails with the opaque "command FETCH illegal in state AUTH"
+        sel_status, _ = self._conn.select(_imap_quote(folder), readonly=True)
+        if sel_status != "OK":
+            logger.warning(f"Cannot select folder {folder}")
+            return None
         status, data = self._conn.uid("FETCH", uid, "(RFC822)")
         if status != "OK" or not data or data[0] is None:
             return None
@@ -170,11 +205,13 @@ class IMAPManager:
             has_attachments=has_attachments,
             attachment_names=attachment_names,
             date=date_formatted,
+            message_id=str(msg.get("Message-ID", "") or "").strip(),
+            references=str(msg.get("References", "") or "").strip(),
         )
 
     def fetch_raw(self, uid: str, folder: str = "INBOX") -> bytes | None:
         """Fetch raw email bytes (for attachment extraction)."""
-        self._conn.select(_imap_quote(folder), readonly=True)
+        self._select(folder, readonly=True)
         status, data = self._conn.uid("FETCH", uid, "(RFC822)")
         if status != "OK" or not data or data[0] is None:
             return None
@@ -184,6 +221,7 @@ class IMAPManager:
 
     def create_folder(self, folder: str) -> bool:
         """Create a new IMAP folder and subscribe to it."""
+        _check_target(folder, "folder")
         status, data = self._conn.create(_imap_quote(folder))
         if status == "OK":
             self._conn.subscribe(_imap_quote(folder))
@@ -198,6 +236,7 @@ class IMAPManager:
 
     def delete_folder(self, folder: str) -> bool:
         """Delete an IMAP folder (must be empty or server empties it)."""
+        _check_target(folder, "folder")
         # Unsubscribe first
         self._conn.unsubscribe(_imap_quote(folder))
         status, _ = self._conn.delete(_imap_quote(folder))
@@ -209,6 +248,8 @@ class IMAPManager:
 
     def rename_folder(self, old_name: str, new_name: str) -> bool:
         """Rename/move an IMAP folder."""
+        _check_target(old_name, "old_name")
+        _check_target(new_name, "new_name")
         status, _ = self._conn.rename(_imap_quote(old_name), _imap_quote(new_name))
         if status == "OK":
             self._conn.subscribe(_imap_quote(new_name))
@@ -217,58 +258,104 @@ class IMAPManager:
         logger.error(f"Failed to rename folder: {old_name} -> {new_name}")
         return False
 
+    def _rollback_copy(self, copy_data, to_folder: str) -> None:
+        """Remove a copy left in the target folder by a failed move (needs UIDPLUS COPYUID)."""
+        copied_uids = None
+        for part in copy_data or []:
+            text = part.decode(errors="replace") if isinstance(part, bytes) else str(part)
+            match = re.search(r"COPYUID \d+ \S+ (\S+?)[\]\s]", text)
+            if match:
+                copied_uids = match.group(1)
+                break
+        if not copied_uids:
+            logger.error(f"Cannot roll back copy in {to_folder}: no COPYUID returned by the server")
+            return
+        try:
+            self._select(to_folder)
+            self._conn.uid("STORE", copied_uids, "+FLAGS", "(\\Deleted)")
+            self._conn.expunge()
+            logger.info(f"Rolled back orphan copy {copied_uids} in {to_folder}")
+        except Exception as e:
+            logger.error(f"Rollback of copy {copied_uids} in {to_folder} failed: {e}")
+
     def move_email(self, uid: str, from_folder: str, to_folder: str) -> bool:
         """Move an email to another folder via IMAP. Creates folder if needed."""
-        self._conn.select(_imap_quote(from_folder))
+        _check_target(to_folder)
+        if to_folder.strip() == (from_folder or "").strip():
+            raise InvalidFolderName(f"source and target are the same folder ('{from_folder}')")
+        self._select(from_folder)
         # Ensure target folder exists
         self._conn.create(_imap_quote(to_folder))
         # Copy then delete (MOVE not supported everywhere)
-        status, _ = self._conn.uid("COPY", uid, _imap_quote(to_folder))
-        if status == "OK":
-            self._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
-            self._conn.expunge()
-            logger.info(f"Moved UID {uid}: {from_folder} -> {to_folder}")
-            return True
-        logger.error(f"Failed to move UID {uid} to {to_folder}")
-        return False
+        status, copy_data = self._conn.uid("COPY", uid, _imap_quote(to_folder))
+        if status != "OK":
+            logger.error(f"Failed to copy UID {uid} to {to_folder}")
+            return False
+        # The copy already exists in the target folder: a failed STORE would
+        # silently duplicate the message, so undo the copy instead.
+        try:
+            status, _ = self._conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+        except Exception as e:
+            logger.error(f"STORE \\Deleted failed for UID {uid} in {from_folder}: {e}")
+            status = "NO"
+        if status != "OK":
+            self._rollback_copy(copy_data, to_folder)
+            return False
+        self._conn.expunge()
+        logger.info(f"Moved UID {uid}: {from_folder} -> {to_folder}")
+        return True
 
     def move_emails_bulk(self, uids: list[str], from_folder: str, to_folder: str) -> dict:
         """Move multiple emails in one batch. Batch COPY by UID sets (50 per call), single EXPUNGE."""
         if not uids:
             return {"moved": 0, "failed": 0}
-        self._conn.select(_imap_quote(from_folder))
+        _check_target(to_folder)
+        if to_folder.strip() == (from_folder or "").strip():
+            raise InvalidFolderName(f"source and target are the same folder ('{from_folder}')")
+        self._select(from_folder)
         self._conn.create(_imap_quote(to_folder))
         moved = []
         failed = 0
+        copy_responses = []
         # Batch COPY: send comma-separated UID sets (chunks of 50) instead of one-by-one
         chunk_size = 50
         for i in range(0, len(uids), chunk_size):
             chunk = uids[i:i + chunk_size]
             uid_set = ",".join(chunk)
-            status, _ = self._conn.uid("COPY", uid_set, _imap_quote(to_folder))
+            status, data = self._conn.uid("COPY", uid_set, _imap_quote(to_folder))
             if status == "OK":
                 moved.extend(chunk)
+                copy_responses.append(data)
             else:
                 # Fallback: try individually for this chunk
                 for uid in chunk:
-                    status, _ = self._conn.uid("COPY", uid, _imap_quote(to_folder))
+                    status, data = self._conn.uid("COPY", uid, _imap_quote(to_folder))
                     if status == "OK":
                         moved.append(uid)
+                        copy_responses.append(data)
                     else:
                         failed += 1
         if moved:
             # Batch STORE+EXPUNGE in one go
             uid_set = ",".join(moved)
-            self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+            try:
+                status, _ = self._conn.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
+            except Exception as e:
+                logger.error(f"Bulk STORE \\Deleted failed in {from_folder}: {e}")
+                status = "NO"
+            if status != "OK":
+                for data in copy_responses:
+                    self._rollback_copy(data, to_folder)
+                return {"moved": 0, "failed": len(uids)}
             self._conn.expunge()
         logger.info(f"Bulk move: {len(moved)} moved to {to_folder}, {failed} failed")
         return {"moved": len(moved), "failed": failed}
 
     def flag_email(self, uid: str, folder: str, flag: str) -> bool:
         """Add a flag to an email."""
-        self._conn.select(_imap_quote(folder))
+        self._select(folder)
         imap_flag = _resolve_flag(flag)
-        status, _ = self._conn.uid("STORE", uid, "+FLAGS", imap_flag)
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", f"({imap_flag})")
         if status == "OK":
             logger.info(f"Flagged UID {uid} with {imap_flag}")
             return True
@@ -276,9 +363,9 @@ class IMAPManager:
 
     def unflag_email(self, uid: str, folder: str, flag: str) -> bool:
         """Remove a flag from an email."""
-        self._conn.select(_imap_quote(folder))
+        self._select(folder)
         imap_flag = _resolve_flag(flag)
-        status, _ = self._conn.uid("STORE", uid, "-FLAGS", imap_flag)
+        status, _ = self._conn.uid("STORE", uid, "-FLAGS", f"({imap_flag})")
         if status == "OK":
             logger.info(f"Unflagged UID {uid}: removed {imap_flag}")
             return True
@@ -286,25 +373,25 @@ class IMAPManager:
 
     def mark_read(self, uid: str, folder: str) -> bool:
         """Mark an email as read."""
-        self._conn.select(_imap_quote(folder))
-        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "\\Seen")
+        self._select(folder)
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "(\\Seen)")
         return status == "OK"
 
     def mark_unread(self, uid: str, folder: str) -> bool:
         """Mark an email as unread."""
-        self._conn.select(_imap_quote(folder))
-        status, _ = self._conn.uid("STORE", uid, "-FLAGS", "\\Seen")
+        self._select(folder)
+        status, _ = self._conn.uid("STORE", uid, "-FLAGS", "(\\Seen)")
         return status == "OK"
 
     def mark_processed(self, uid: str, folder: str) -> bool:
         """Add the MailIA processed flag."""
-        self._conn.select(_imap_quote(folder))
-        status, _ = self._conn.uid("STORE", uid, "+FLAGS", PROCESSED_FLAG)
+        self._select(folder)
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", f"({PROCESSED_FLAG})")
         return status == "OK"
 
     def get_unprocessed_uids(self, folder: str = "INBOX") -> list[str]:
         """Get UIDs of emails not yet processed by MailIA."""
-        self._conn.select(_imap_quote(folder), readonly=True)
+        self._select(folder, readonly=True)
         # Search for emails WITHOUT our custom flag
         status, data = self._conn.uid("SEARCH", None, f"UNKEYWORD {PROCESSED_FLAG}")
         if status != "OK":
@@ -338,8 +425,8 @@ class IMAPManager:
         if trash_folder and folder != trash_folder:
             return self.move_email(uid, folder, trash_folder)
         # Fallback: flag as Deleted
-        self._conn.select(_imap_quote(folder))
-        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+        self._select(folder)
+        status, _ = self._conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
         if status == "OK":
             self._conn.expunge()
             return True
@@ -354,27 +441,37 @@ class IMAPManager:
 
         if trash_folder and folder != trash_folder:
             # Batch move to trash: SELECT once, COPY each, flag all, EXPUNGE once
-            self._conn.select(_imap_quote(folder))
+            self._select(folder)
             self._conn.create(_imap_quote(trash_folder))
             moved = []
             failed = 0
+            copy_responses = []
             for uid in uids:
-                status, _ = self._conn.uid("COPY", uid, _imap_quote(trash_folder))
+                status, data = self._conn.uid("COPY", uid, _imap_quote(trash_folder))
                 if status == "OK":
                     moved.append(uid)
+                    copy_responses.append(data)
                 else:
                     failed += 1
             if moved:
                 uid_set = ",".join(moved)
-                self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+                try:
+                    status, _ = self._conn.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
+                except Exception as e:
+                    logger.error(f"Bulk delete STORE \\Deleted failed in {folder}: {e}")
+                    status = "NO"
+                if status != "OK":
+                    for data in copy_responses:
+                        self._rollback_copy(data, trash_folder)
+                    return {"deleted": 0, "failed": len(uids)}
                 self._conn.expunge()
             logger.info(f"Bulk delete: {len(moved)} moved to trash, {failed} failed")
             return {"deleted": len(moved), "failed": failed}
         else:
             # Already in trash or no trash: batch flag + single EXPUNGE
-            self._conn.select(_imap_quote(folder))
+            self._select(folder)
             uid_set = ",".join(uids)
-            status, _ = self._conn.uid("STORE", uid_set, "+FLAGS", "\\Deleted")
+            status, _ = self._conn.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
             if status == "OK":
                 self._conn.expunge()
                 logger.info(f"Bulk delete: {len(uids)} permanently deleted from {folder}")

@@ -276,7 +276,12 @@ Date actuelle: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 Analyse ces emails et genere le rapport JSON complet."""
 
     # Call AI
-    llm = await get_llm_for_user(db, user, provider_id)
+    try:
+        llm = await get_llm_for_user(db, user, provider_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"AI analysis failed: {e}")
     messages = [
         AIMessage("system", DIGEST_SYSTEM_PROMPT),
         AIMessage("user", user_prompt),

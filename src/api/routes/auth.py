@@ -108,24 +108,34 @@ async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends
     reset_token = create_reset_token(user.id)
     reset_url = f"{settings.app_url}/static/index.html?reset_token={reset_token}"
 
-    # Find an SMTP-capable account to send the email (admin first, then any)
+    # Find an SMTP-capable account to send the email (admin first, then any).
+    # NOTE: this borrows a real user's mailbox — an unauthenticated request therefore
+    # makes the server send mail through someone's production account. A dedicated
+    # sender configured at system level would be the right fix; ordering by id at least
+    # makes the choice deterministic and the log says which account was used.
     smtp_account = None
     result = await db.execute(
         select(MailAccount)
         .join(User, MailAccount.user_id == User.id)
         .where(User.is_admin.is_(True), MailAccount.smtp_host.isnot(None))
+        .order_by(MailAccount.id)
         .limit(1)
     )
     smtp_account = result.scalar_one_or_none()
     if not smtp_account:
         result = await db.execute(
-            select(MailAccount).where(MailAccount.smtp_host.isnot(None)).limit(1)
+            select(MailAccount).where(MailAccount.smtp_host.isnot(None))
+            .order_by(MailAccount.id).limit(1)
         )
         smtp_account = result.scalar_one_or_none()
 
     if not smtp_account:
         logger.error("No SMTP account available to send password reset email")
         return {"status": "ok"}
+    logger.info(
+        "Password reset for user %s will be sent through mail account %s (%s)",
+        user.id, smtp_account.id, smtp_account.smtp_host,
+    )
 
     sender = smtp_account.smtp_user or smtp_account.imap_user
     msg = MIMEMultipart("alternative")
@@ -157,14 +167,15 @@ async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
+    from src.smtp_client import smtp_connect
+
     try:
         smtp_password = decrypt_value(smtp_account.smtp_password_encrypted) if smtp_account.smtp_password_encrypted else decrypt_value(smtp_account.imap_password_encrypted)
         smtp_port = smtp_account.smtp_port or 587
-        if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_account.smtp_host, smtp_port)
-        else:
-            server = smtplib.SMTP(smtp_account.smtp_host, smtp_port)
-            server.starttls()
+        server = smtp_connect(
+            smtp_account.smtp_host, smtp_port,
+            getattr(smtp_account, "smtp_ssl", True),
+        )
         server.login(smtp_account.smtp_user or smtp_account.imap_user, smtp_password)
         server.sendmail(sender, [user.email], msg.as_string())
         server.quit()

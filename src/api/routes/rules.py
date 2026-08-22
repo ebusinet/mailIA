@@ -178,6 +178,7 @@ async def preview_rule(
                     "needs_ai": r.condition.needs_ai,
                 },
                 "actions": [{"type": a.action_type, "target": a.target} for a in r.actions],
+                "unknown_actions": r.unknown_actions,
                 "notify": r.notify,
                 "notify_summary": r.notify_summary,
             }
@@ -227,6 +228,12 @@ def _validate_classic_rule(conditions: list[dict], actions: list[dict]):
     for a in actions:
         if a.get("type") not in _VALID_ACTIONS:
             raise HTTPException(status_code=422, detail=f"Invalid action: {a.get('type')}")
+        # move without a target destroys mail (the server accepts COPY to "");
+        # forward without one silently does nothing.
+        if a.get("type") in ("move", "forward") and not str(a.get("target") or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"L'action « {a.get('type')} » exige une cible non vide")
 
 
 @router.get("/classic/")
@@ -466,7 +473,8 @@ def _parse_email_fields(item, whitelist=None, blacklist=None):
 
     msg = email.message_from_bytes(header_bytes)
     from_addr = str(email.utils.parseaddr(str(msg.get("From", "") or ""))[1])
-    to_addr = str(email.utils.parseaddr(str(msg.get("To", "") or ""))[1])
+    # getaddresses (not parseaddr) — a multi-recipient To header parses to ('', '')
+    to_addr = ", ".join(a[1] for a in email.utils.getaddresses([str(msg.get("To", "") or "")]) if a[1])
     cc_addr = str(msg.get("Cc", "") or "")
     raw_subject = str(msg.get("Subject", "") or "")
     try:
@@ -512,10 +520,34 @@ def _batched_store(conn, uids, flags, folder_quoted):
     batch = 50
     for i in range(0, len(uids), batch):
         chunk = uids[i:i + batch]
-        conn.uid("STORE", ",".join(chunk), "+FLAGS", flags)
+        conn.uid("STORE", ",".join(chunk), "+FLAGS", f"({flags})")
 
 
-def _execute_actions(imap, conn, matched_uids, actions, folder):
+def _forward_email(account, imap, uid: str, folder: str, target: str) -> bool:
+    """Redirect a matched email to another address via the account's SMTP server."""
+    from src.security import decrypt_value as _dec
+    from src.smtp_client import smtp_connect
+
+    raw = imap.fetch_raw(uid, folder)
+    if not raw:
+        return False
+    msg = email.message_from_bytes(raw)
+    msg["Resent-From"] = account.imap_user
+    msg["Resent-To"] = target
+
+    smtp_password = _dec(account.smtp_password_encrypted) if account.smtp_password_encrypted else _dec(account.imap_password_encrypted)
+    smtp_user = account.smtp_user or account.imap_user
+    server = smtp_connect(account.smtp_host, account.smtp_port,
+                          getattr(account, "smtp_ssl", True), timeout=30)
+    try:
+        server.login(smtp_user, smtp_password)
+        server.sendmail(account.imap_user, [target], msg.as_bytes())
+    finally:
+        server.quit()
+    return True
+
+
+def _execute_actions(imap, conn, matched_uids, actions, folder, account=None):
     """Execute rule actions on matched UIDs. Returns list of action results."""
     from src.imap.manager import _imap_quote
     actions_done = []
@@ -523,7 +555,7 @@ def _execute_actions(imap, conn, matched_uids, actions, folder):
     for action in actions:
         atype = action.get("type")
         target = action.get("target", "")
-        if atype == "move" and target and matched_uids:
+        if atype == "move" and str(target).strip() and matched_uids:
             res = imap.move_emails_bulk(matched_uids, folder, target)
             actions_done.append({"type": "move", "target": target, **res})
         elif atype == "mark_read" and matched_uids:
@@ -542,10 +574,28 @@ def _execute_actions(imap, conn, matched_uids, actions, folder):
             _batched_store(conn, matched_uids, "\\Deleted", folder_q)
             conn.expunge()
             actions_done.append({"type": "delete", "count": len(matched_uids)})
+        elif atype == "forward" and str(target).strip() and matched_uids:
+            if not account or not account.smtp_host:
+                actions_done.append({"type": "forward", "target": target, "forwarded": 0,
+                                     "error": "Aucun serveur SMTP configure pour ce compte"})
+                continue
+            forwarded, failed = 0, 0
+            for uid in matched_uids:
+                try:
+                    if _forward_email(account, imap, uid, folder, target):
+                        forwarded += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.error(f"Forward of UID {uid} to {target} failed: {e}")
+                    failed += 1
+            conn.select(folder_q)
+            actions_done.append({"type": "forward", "target": target,
+                                 "forwarded": forwarded, "failed": failed})
     return actions_done
 
 
-def _apply_rule_generator(rule_data, rule_actions, config, folder, whitelist=None, blacklist=None):
+def _apply_rule_generator(rule_data, rule_actions, config, folder, whitelist=None, blacklist=None, account=None):
     """Sync generator that scans folder and yields NDJSON progress events."""
     from src.imap.manager import IMAPManager, _imap_quote
 
@@ -581,7 +631,7 @@ def _apply_rule_generator(rule_data, rule_actions, config, folder, whitelist=Non
                 scanned = min(i + batch_size, total)
                 yield json.dumps({"type": "progress", "scanned": scanned, "total": total, "matched": len(matched_uids)}) + "\n"
 
-            actions_done = _execute_actions(imap, conn, matched_uids, rule_actions, folder)
+            actions_done = _execute_actions(imap, conn, matched_uids, rule_actions, folder, account=account)
             yield json.dumps({"type": "result", "matched": len(matched_uids), "actions": actions_done}) + "\n"
 
     except Exception as e:
@@ -637,7 +687,7 @@ async def apply_classic_rule(
 
     if stream:
         return StreamingResponse(
-            iterate_in_threadpool(_apply_rule_generator(rule_data, rule.actions, config, req.folder, whitelist=wl_set, blacklist=bl_set)),
+            iterate_in_threadpool(_apply_rule_generator(rule_data, rule.actions, config, req.folder, whitelist=wl_set, blacklist=bl_set, account=account)),
             media_type="application/x-ndjson",
         )
 
@@ -668,7 +718,7 @@ async def apply_classic_rule(
                     ):
                         matched_uids.append(fields["uid"])
 
-            actions_done = _execute_actions(imap, conn, matched_uids, rule.actions, req.folder)
+            actions_done = _execute_actions(imap, conn, matched_uids, rule.actions, req.folder, account=account)
 
     except HTTPException:
         raise
@@ -680,7 +730,8 @@ async def apply_classic_rule(
 
 
 def apply_classic_rules_on_sync(imap, folder: str, uids: list[str],
-                                 classic_rules: list, whitelist=None, blacklist=None) -> dict:
+                                 classic_rules: list, whitelist=None, blacklist=None,
+                                 account=None) -> dict:
     """Apply all active classic rules to a batch of UIDs during sync.
 
     Args:
@@ -731,7 +782,7 @@ def apply_classic_rules_on_sync(imap, folder: str, uids: list[str],
                 fields["is_reply"], fields["size"], fields.get("email_date"),
             ):
                 total_matched += 1
-                actions_done = _execute_actions(imap, conn, [uid], rule.actions, folder)
+                actions_done = _execute_actions(imap, conn, [uid], rule.actions, folder, account=account)
                 total_actions += len(actions_done)
 
                 for action in rule.actions:

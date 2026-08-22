@@ -1130,7 +1130,7 @@
                             <div id="preview-attachments" style="padding:0.1rem 0.75rem 0.4rem;display:none"></div>
                         </div>
                         <div id="preview-tech-headers-panel" style="display:none;flex-shrink:0;max-height:200px;overflow-y:auto;background:var(--c-bg-elevated);border:1px solid var(--c-border);border-radius:4px;margin:0.3rem 0.5rem;padding:0.4rem;font-family:monospace;font-size:0.7rem;line-height:1.3"></div>
-                        <iframe id="preview-body-html" style="display:none;width:100%;border:none;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+                        <iframe id="preview-body-html" style="display:none;width:100%;border:none;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-popups allow-popups-to-escape-sandbox"></iframe>
                         <div id="preview-body" style="display:none;padding:0.75rem;color:var(--c-text);font-size:0.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;flex:1;min-height:0;overflow-y:auto"></div>
                     </div>
                 </div>
@@ -1236,6 +1236,9 @@
                 </div>
                 <input type="text" id="acc-smtp-host" placeholder="Serveur SMTP" class="input-field">
                 <input type="number" id="acc-smtp-port" placeholder="Port SMTP" value="465" class="input-field">
+                <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem">
+                    <input type="checkbox" id="acc-smtp-ssl" checked> <label for="acc-smtp-ssl" style="color:var(--c-text-secondary)">SSL / STARTTLS</label>
+                </div>
                 <input type="text" id="acc-smtp-user" placeholder="Utilisateur SMTP (si different)" class="input-field">
                 <div style="position:relative">
                     <input type="password" id="acc-smtp-pass" placeholder="Mot de passe SMTP (si different)" class="input-field" style="width:100%;padding-right:3rem">
@@ -1679,7 +1682,7 @@
             <div id="email-body-html-toggle" style="display:none;margin-bottom:0.3rem;flex-shrink:0">
                 <button onclick="toggleHtmlView()" class="btn-sm" id="btn-html-toggle">Voir en texte</button>
             </div>
-            <iframe id="email-body-html" style="display:none;width:100%;border:none;border-radius:4px;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+            <iframe id="email-body-html" style="display:none;width:100%;border:none;border-radius:4px;background:var(--email-bg);flex:1;min-height:0" sandbox="allow-popups allow-popups-to-escape-sandbox"></iframe>
             <div id="email-body" style="display:none;color:var(--c-text);font-size:0.9rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;flex:1;overflow-y:auto;min-height:0"></div>
         </div>
     </div>
@@ -2178,9 +2181,9 @@ async function doGlobalSearch() {
                 <div class="result-card" style="margin-bottom:0.5rem">
                     <div class="result-from">${esc(r.from_addr)}</div>
                     <div class="result-subject">${esc(r.subject)}</div>
-                    <div class="result-date">${r.date} | ${folderDisplayName(r.folder) || r.folder}
+                    <div class="result-date">${esc(r.date)} | ${esc(folderDisplayName(r.folder) || r.folder)}
                         ${r.has_attachments ? '<span style="color:#a78bfa"> PJ</span>' : ''}</div>
-                    ${r.highlight?.body ? '<div class="result-highlight">' + r.highlight.body.join('...') + '</div>' : ''}
+                    ${r.highlight?.body ? '<div class="result-highlight">' + r.highlight.body.map(escHighlight).join('...') + '</div>' : ''}
                 </div>`).join('');
         }
     } catch(e) {
@@ -2269,7 +2272,7 @@ function _renderImportDestTree() {
         prefix: 'imp',
         storage: 'imap',
         showCreate: false,
-        onSelect: `selectImportDest(this)`
+        action: 'importDest'
     });
 
     // Local root item
@@ -2288,7 +2291,7 @@ function _renderImportDestTree() {
             prefix: 'imp',
             storage: 'local',
             showCreate: false,
-            onSelect: `selectImportDest(this)`
+            action: 'importDest'
         });
     }
 
@@ -2479,7 +2482,7 @@ function _renderImportJob(job, statusEl, detailsEl) {
     } else if (job.status === 'interrupted') {
         statusEl.innerHTML =
             `<span style="color:var(--c-text-warning)">Import interrompu a ${p.current || 0}/${p.total || '?'} emails</span>` +
-            `<div style="margin-top:0.3rem"><button class="btn-primary" onclick="resumeImportJob('${esc(job.id)}', ${job.account_id})">Reprendre l'import</button></div>`;
+            `<div style="margin-top:0.3rem"><button class="btn-primary" onclick="resumeImportJob(${escJs(job.id)}, ${job.account_id})">Reprendre l'import</button></div>`;
     }
 
     // Render folders done table
@@ -2806,11 +2809,11 @@ function renderChatMd(text) {
             const thinking = text.slice(0, headerIdx).trim();
             const answer = text.slice(headerIdx);
             if (thinking) {
-                thinkingHtml = `<details class="chat-thinking-block"><summary>Recherche en cours...</summary><div>${marked.parse(thinking)}</div></details>`;
+                thinkingHtml = `<details class="chat-thinking-block"><summary>Recherche en cours...</summary><div>${mdSafe(thinking)}</div></details>`;
             }
-            answerHtml = marked.parse(answer);
+            answerHtml = mdSafe(answer);
         } else {
-            answerHtml = marked.parse(text);
+            answerHtml = mdSafe(text);
         }
         let html = thinkingHtml + answerHtml;
         // Restore task plan blocks
@@ -3786,7 +3789,8 @@ function applyClassicRule(ruleId) {
     container.innerHTML = _renderFolderTreeWidget({
         prefix: 'af',
         showCreate: false,
-        onSelect: `_doApplyRule(${ruleId}, (this.dataset.fpStorage==='local'?'local:':'')+this.dataset.fpPath, this)`
+        action: 'applyRule',
+        actionArg: ruleId
     });
 }
 
@@ -4181,7 +4185,25 @@ function _onCondFieldChange(sel) {
 
 // --- Shared folder tree picker widget ---
 // Renders a collapsible folder tree for IMAP + Local
-// opts: { onSelect: 'fnName(path,name,storage)', excludePath, excludeStorage, showCreate: bool, prefix: string }
+// The folder picker used to mount a caller-supplied JavaScript *expression* straight
+// into onclick="". escAttr() preserved the attribute syntax but protected nothing: any
+// caller interpolating a folder name would have injected code. Callers now name an
+// action from this registry, and the value travels in data-* attributes only.
+const FP_ACTIONS = {
+    importDest: (el) => selectImportDest(el),
+    applyRule:  (el) => _doApplyRule(Number(el.dataset.fpArg),
+                                     (el.dataset.fpStorage === 'local' ? 'local:' : '') + el.dataset.fpPath, el),
+    pick:       (el) => _pickFolder(el, el.dataset.fpPath, el.dataset.fpName, el.dataset.fpStorage),
+    move:       (el) => moveToFolder(el.dataset.fpPath, el.dataset.fpStorage),
+};
+
+function _fpDispatch(el) {
+    const fn = FP_ACTIONS[el.dataset.fpAction];
+    if (fn) fn(el);
+    else console.warn('Unknown folder-picker action:', el.dataset.fpAction);
+}
+
+// opts: { action: <key of FP_ACTIONS>, actionArg, excludePath, excludeStorage, showCreate: bool, prefix: string }
 function _renderFolderTreeWidget(opts = {}) {
     const prefix = opts.prefix || 'ftp';
     const showCreate = opts.showCreate !== false;
@@ -4205,7 +4227,8 @@ function _renderFolderTreeNodes(folders, depth, opts) {
     let html = '';
     const prefix = opts.prefix || 'ftp';
     const showCreate = opts.showCreate !== false && opts.storage !== 'local';
-    const onSelect = opts.onSelect || '';
+    const action = opts.action || '';
+    const actionArg = opts.actionArg;
     const excludePath = opts.excludePath;
     const excludeStorage = opts.excludeStorage;
     const storage = opts.storage || 'imap';
@@ -4222,7 +4245,7 @@ function _renderFolderTreeNodes(folders, depth, opts) {
         const createPath = f.display_path || f.path;
         const plusBtn = showCreate ? `<span class="fp-add-btn" data-parent-path="${escAttr(createPath)}" onclick="event.stopPropagation();_pickFolderNewSub(this.dataset.parentPath)" title="Créer un sous-dossier" style="margin-left:auto;padding:0 0.3rem;cursor:pointer;font-size:0.85rem;color:var(--c-text-muted);font-weight:700;opacity:0.5" onmouseover="this.style.opacity=1;this.style.color='var(--c-text-accent)'" onmouseout="this.style.opacity=0.5;this.style.color='var(--c-text-muted)'">+</span>` : '';
         if (!f.noselect) {
-            html += `<div class="popup-item" data-fp-path="${escAttr(f.path)}" data-fp-name="${escAttr(f.name)}" data-fp-storage="${storage}" onclick="${escAttr(onSelect)}" style="padding:0.25rem 0.6rem 0.25rem ${indent}px;font-size:0.82rem;cursor:pointer;white-space:nowrap;display:flex;align-items:center"><span style="flex:1;display:flex;align-items:center">${arrow}${esc(f.name)}</span>${plusBtn}</div>`;
+            html += `<div class="popup-item" data-fp-path="${escAttr(f.path)}" data-fp-name="${escAttr(f.name)}" data-fp-storage="${storage}" data-fp-action="${escAttr(action)}"${actionArg !== undefined ? ` data-fp-arg="${escAttr(String(actionArg))}"` : ''} onclick="_fpDispatch(this)" style="padding:0.25rem 0.6rem 0.25rem ${indent}px;font-size:0.82rem;cursor:pointer;white-space:nowrap;display:flex;align-items:center"><span style="flex:1;display:flex;align-items:center">${arrow}${esc(f.name)}</span>${plusBtn}</div>`;
         }
         if (hasChildren) {
             html += `<div id="${childId}" class="fp-children" style="${collapsed ? 'display:none' : ''}">`;
@@ -4250,7 +4273,7 @@ function _openFolderPicker(btn) {
     popup.innerHTML = _renderFolderTreeWidget({
         prefix: 'fp',
         showCreate: true,
-        onSelect: `_pickFolder(this, this.dataset.fpPath, this.dataset.fpName, this.dataset.fpStorage)`
+        action: 'pick'
     });
     popup.dataset.targetId = btn.dataset.pickerId || '';
     document._folderPickerBtn = btn;
@@ -4381,8 +4404,8 @@ function bulkToggleSpam() {
         popup.style.top = (rect.bottom + 4) + 'px';
         popup.style.left = Math.min(rect.left, window.innerWidth - 260) + 'px';
         let items = '';
-        if (senderEmail) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_bulkMarkSpam('email','${escAttr(senderEmail)}')" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x2709; Email: <strong>${esc(senderEmail)}</strong></div>`;
-        if (senderDomain) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_bulkMarkSpam('domain','${escAttr(senderDomain)}')" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x1F310; Domaine: <strong>${esc(senderDomain)}</strong></div>`;
+        if (senderEmail) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_bulkMarkSpam('email',${escJs(senderEmail)})" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x2709; Email: <strong>${esc(senderEmail)}</strong></div>`;
+        if (senderDomain) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_bulkMarkSpam('domain',${escJs(senderDomain)})" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x1F310; Domaine: <strong>${esc(senderDomain)}</strong></div>`;
         popup.innerHTML = `<div style="padding:0.2rem 0.5rem 0.3rem;font-weight:600;color:var(--c-text-error-bold);font-size:0.78rem">Ajouter a la blacklist</div>${items}`;
         document.body.appendChild(popup);
         const close = (e) => { if (!popup.contains(e.target) && e.target !== btn) { popup.remove(); document.removeEventListener('click', close); } };
@@ -4454,7 +4477,7 @@ async function _createSpamRule(mode, value) {
         // Move selected emails to Junk
         const uids = _getSelectedUids();
         if (uids.length && explorerCurrentAccount) {
-            const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+            const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage, target_storage: 'imap' });
             for (const uid of uids) {
                 try {
                     await api(`/accounts/${explorerCurrentAccount}/message/${uid}/move?${params}`, {
@@ -4583,6 +4606,7 @@ async function saveAccount() {
         imap_ssl: document.getElementById('acc-imap-ssl').checked,
         smtp_host: document.getElementById('acc-smtp-host').value.trim() || null,
         smtp_port: parseInt(document.getElementById('acc-smtp-port').value) || 465,
+        smtp_ssl: document.getElementById('acc-smtp-ssl').checked,
         smtp_user: document.getElementById('acc-smtp-user').value.trim() || null,
     };
     const imap_password = document.getElementById('acc-imap-pass').value;
@@ -4617,6 +4641,7 @@ function editAccount(id) {
     document.getElementById('acc-imap-ssl').checked = a.imap_ssl;
     document.getElementById('acc-smtp-host').value = a.smtp_host || '';
     document.getElementById('acc-smtp-port').value = a.smtp_port || 465;
+    document.getElementById('acc-smtp-ssl').checked = a.smtp_ssl !== false;
     document.getElementById('acc-smtp-user').value = a.smtp_user || '';
     document.getElementById('acc-smtp-pass').value = '';
     document.getElementById('account-form-title').textContent = 'Modifier: ' + a.name;
@@ -4643,7 +4668,12 @@ async function syncAccount(id) {
     const btn = document.getElementById('sync-btn-' + id);
     btn.textContent = 'Sync...'; btn.disabled = true;
     try { await api('/accounts/' + id + '/sync', { method: 'POST' }); btn.textContent = 'Lance !'; }
-    catch(e) { btn.textContent = 'Erreur'; }
+    catch(e) {
+        // The button alone said "Erreur" and swallowed the reason — including
+        // "no worker running", the very case the user needs to understand.
+        btn.textContent = 'Erreur';
+        alert('Synchronisation impossible : ' + (e.message || e));
+    }
     setTimeout(() => { btn.textContent = 'Sync'; btn.disabled = false; }, 3000);
 }
 
@@ -4663,6 +4693,7 @@ function clearAccountForm() {
     document.getElementById('acc-imap-pass').value = '';
     document.getElementById('acc-imap-pass').placeholder = 'Mot de passe IMAP';
     document.getElementById('acc-imap-ssl').checked = true;
+    document.getElementById('acc-smtp-ssl').checked = true;
     document.getElementById('acc-edit-id').value = '';
     document.getElementById('acc-cancel-btn').style.display = 'none';
     document.getElementById('account-form-title').textContent = 'Ajouter un compte';
@@ -4688,6 +4719,7 @@ async function testFromForm(type) {
         imap_password: document.getElementById('acc-imap-pass').value,
         smtp_host: document.getElementById('acc-smtp-host').value.trim() || null,
         smtp_port: parseInt(document.getElementById('acc-smtp-port').value) || 465,
+        smtp_ssl: document.getElementById('acc-smtp-ssl').checked,
         test_type: type,
     };
     if (!body.imap_host || !body.imap_user || !body.imap_password) { resultEl.style.color = 'var(--c-text-error)'; resultEl.textContent = 'Serveur, utilisateur et mot de passe requis.'; return; }
@@ -4734,7 +4766,7 @@ function _renderBreadcrumb(path) {
     const parentHtml = parentParts.map((p, i) => {
         const partPath = parts.slice(0, i + 1).join(sep);
         const display = folderDisplayName(partPath) || p;
-        return `<span style="color:var(--c-text-muted);cursor:pointer" onclick="selectFolder('${escAttr(partPath)}', '${explorerCurrentStorage}')">${esc(display)}</span>`;
+        return `<span style="color:var(--c-text-muted);cursor:pointer" onclick="selectFolder(${escJs(partPath)}, '${explorerCurrentStorage}')">${esc(display)}</span>`;
     }).join('<span style="color:var(--c-text-dimmed);margin:0 0.2rem">/</span>');
     return parentHtml + '<span style="color:var(--c-text-dimmed);margin:0 0.2rem">/</span>' + `<span style="color:var(--c-text-accent)">${esc(folderDisplayName(path) || current)}</span>`;
 }
@@ -5008,10 +5040,11 @@ function _onFolderCtx(e, el) {
     const hasSelection = selCount > 0;
     const purgeable = ['spam', 'brouillons', 'drafts', 'junk', 'courrier indésirable'].includes(path.toLowerCase().split('.').pop().split('/').pop().toLowerCase());
     menu.innerHTML = `
-        <div class="folder-ctx-item" onclick="_ctxCreateSubfolder('${escAttr(path)}')">📁 Nouveau sous-dossier</div>
-        ${path ? `<div class="folder-ctx-item" onclick="_ctxRenameFolder('${escAttr(path)}')">✏️ Renommer</div>` : ''}
-        ${purgeable ? `<div class="folder-ctx-item danger" onclick="_ctxEmptyFolder('${escAttr(path)}')">🧹 Vider le dossier</div>` : ''}
-        ${path ? `<div class="folder-ctx-item danger" onclick="_ctxDeleteFolder('${escAttr(path)}')">🗑️ Supprimer ce dossier</div>` : ''}
+        <div class="folder-ctx-item" onclick="_ctxCreateSubfolder(${escJs(path)})">📁 Nouveau sous-dossier</div>
+        ${path ? `<div class="folder-ctx-item" onclick="_ctxRenameFolder(${escJs(path)})">✏️ Renommer</div>` : ''}
+        ${path ? `<div class="folder-ctx-item" onclick="_ctxExportFolder(${escJs(path)})">📦 Exporter en ZIP</div>` : ''}
+        ${purgeable ? `<div class="folder-ctx-item danger" onclick="_ctxEmptyFolder(${escJs(path)})">🧹 Vider le dossier</div>` : ''}
+        ${path ? `<div class="folder-ctx-item danger" onclick="_ctxDeleteFolder(${escJs(path)})">🗑️ Supprimer ce dossier</div>` : ''}
         ${hasSelection ? `<div class="folder-ctx-item danger" onclick="_bulkDeleteFolders()">🗑️ Supprimer les ${selCount} dossier(s)</div>` : ''}
     `;
     menu.style.left = e.clientX + 'px';
@@ -5026,6 +5059,33 @@ function _onFolderCtx(e, el) {
 function _closeFolderCtx() {
     const m = document.getElementById('folder-ctx-menu');
     if (m) m.remove();
+}
+async function _ctxExportFolder(path) {
+    _closeFolderCtx();
+    const accountId = document.getElementById('explorer-account').value;
+    if (!accountId) { alert('Aucun compte sélectionné.'); return; }
+    const label = _decodeImapUtf7(path);
+    try {
+        const qs = new URLSearchParams({ folder: path, storage: 'imap' });
+        const resp = await apiRaw(`/accounts/${accountId}/folder-export?${qs}`);
+        if (!resp.ok) {
+            const txt = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${txt.slice(0, 200)}`);
+        }
+        const count = resp.headers.get('X-Email-Count') || '?';
+        const cd = resp.headers.get('Content-Disposition') || '';
+        const m = cd.match(/filename="([^"]+)"/);
+        const fname = m ? m[1] : `mailia_export_${Date.now()}.zip`;
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fname;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert(`${count} email(s) exporté(s) depuis « ${label} ».`);
+    } catch (e) {
+        alert(`Export échoué : ${e.message}`);
+    }
 }
 async function _ctxEmptyFolder(path) {
     _closeFolderCtx();
@@ -5159,7 +5219,7 @@ async function _openStandaloneEmail(uid, accountId, folder, storage, mode) {
     window._standaloneMode = true;
 
     // Load accounts cache for compose (needed by replyAllEmail, openCompose)
-    try { accountsCache = await api('/accounts'); } catch(e) { accountsCache = []; }
+    try { accountsCache = await api('/accounts/'); } catch(e) { accountsCache = []; }
 
     // Hide sidebar, header, main content — show only reading overlay
     document.querySelectorAll('header, .container, #app-view > *').forEach(el => el.style.display = 'none');
@@ -5266,8 +5326,9 @@ async function _onFolderDrop(e, folderEl) {
             // Emails → folder: move emails
             if (!payload.uids || !payload.uids.length) return;
             if (payload.fromFolder === targetPath) return;
+            const targetStorage = folderEl.dataset.storage || 'imap';
             const promises = payload.uids.map(uid =>
-                api(`/accounts/${accountId}/message/${uid}/move?folder=${encodeURIComponent(payload.fromFolder)}&storage=${payload.storage || 'imap'}`, {
+                api(`/accounts/${accountId}/message/${uid}/move?folder=${encodeURIComponent(payload.fromFolder)}&storage=${payload.storage || 'imap'}&target_storage=${targetStorage}`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ target_folder: targetPath })
                 })
@@ -5464,12 +5525,15 @@ async function bulkToggleRead() {
     const uids = _getSelectedUids();
     if (!uids.length) return;
     const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+    let failed = 0, lastError = null;
     for (const uid of uids) {
         const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
         const isSeen = row ? row.dataset.seen === 'true' : true;
         const action = isSeen ? 'remove' : 'add';
-        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'seen', action }) }); } catch {}
+        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'seen', action }) }); }
+        catch (e) { failed++; lastError = e; }
     }
+    _reportBulkFailures(failed, uids.length, lastError, 'Marquage lu/non lu');
     await loadMessages();
 }
 
@@ -5477,13 +5541,23 @@ async function bulkToggleFlag() {
     const uids = _getSelectedUids();
     if (!uids.length) return;
     const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
+    let failed = 0, lastError = null;
     for (const uid of uids) {
         const row = document.querySelector(`.mail-row[data-uid="${uid}"]`);
         const isFlagged = row ? row.dataset.flagged === 'true' : false;
         const action = isFlagged ? 'remove' : 'add';
-        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'flagged', action }) }); } catch {}
+        try { await api(`/accounts/${explorerCurrentAccount}/message/${uid}/flags?${params}`, { method: 'POST', body: JSON.stringify({ flag: 'flagged', action }) }); }
+        catch (e) { failed++; lastError = e; }
     }
+    _reportBulkFailures(failed, uids.length, lastError, 'Marquage important');
     await loadMessages();
+}
+
+// The list is repainted from the server right after these loops, so a swallowed
+// failure looks exactly like "nothing happened" to the user.
+function _reportBulkFailures(failed, total, error, label) {
+    if (!failed) return;
+    alert(`${label} : ${failed} echec(s) sur ${total}.\n${error ? (error.message || error) : ''}`);
 }
 
 function bulkTogglePin() {
@@ -5513,7 +5587,10 @@ async function bulkDelete() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ uids, folder: explorerCurrentFolder }),
         });
-    } catch (e) { console.error('Bulk delete error:', e); }
+    } catch (e) {
+        console.error('Bulk delete error:', e);
+        alert(`Suppression de ${uids.length} email(s) echouee : ${e.message || e}`);
+    }
     clearSelection();
     await loadMessages();
 }
@@ -5557,7 +5634,7 @@ async function searchMultiFolders(q, folders) {
                 if (m.flagged) icons += '<span class="icon-flag" title="Important">!</span>';
                 if (m.answered) icons += '<span class="icon-reply" title="Repondu">&#8617;</span>';
                 const folderBadge = `<span style="background:var(--c-bg-hover);padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;color:var(--c-text-muted);margin-left:0.3rem">${esc(m.folder_display || folderDisplayName(m.folder))}</span>`;
-                return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmailFromSearch('${m.uid}', '${escAttr(m.folder)}', this)" data-uid="${m.uid}" data-folder="${escAttr(m.folder)}" data-seen="${m.seen}" data-flagged="${m.flagged}">
+                return `<div class="mail-row ${m.seen ? '' : 'unread'}" onclick="openEmailFromSearch('${m.uid}', ${escJs(m.folder)}, this)" data-uid="${m.uid}" data-folder="${escAttr(m.folder)}" data-seen="${m.seen}" data-flagged="${m.flagged}">
                     <div class="mail-icons">${icons}</div>
                     <div class="mail-from">${esc(m.from)}</div>
                     <div class="mail-subject">${esc(m.subject) || '<em style="color:var(--c-text-muted)">(sans sujet)</em>'}${folderBadge}</div>
@@ -5732,7 +5809,7 @@ async function loadMessages(page) {
                     if (fSpam) {
                         const mEmail = (m.from.match(/[\w.+-]+@[\w.-]+/) || [''])[0].toLowerCase();
                         const mDomain = mEmail.includes('@') ? mEmail.split('@')[1] : '';
-                        if (mEmail) icons += `<span onclick="event.stopPropagation();addWhitelistFromSpamList('email','${escAttr(mEmail)}')" style="cursor:pointer;font-size:0.65rem;color:var(--c-text-success)" title="Whitelist ${esc(mEmail)}">&#x2705;</span>`;
+                        if (mEmail) icons += `<span onclick="event.stopPropagation();addWhitelistFromSpamList('email',${escJs(mEmail)})" style="cursor:pointer;font-size:0.65rem;color:var(--c-text-success)" title="Whitelist ${esc(mEmail)}">&#x2705;</span>`;
                     }
                 }
                 const flagPrefix = m.flagged ? '<span style="color:var(--c-text-error-bold);font-weight:bold" title="Important">! </span>' : '';
@@ -6129,23 +6206,32 @@ async function emptySpamFolder() {
     const nb = count ? count[1] : '?';
     if (!confirm(`Vider le dossier spam "${folderDisplayName(folder)}" ?\n\n${nb} message(s) seront supprimés définitivement.`)) return;
     try {
-        // Fetch all UIDs in the folder
-        const params = new URLSearchParams({ folder, page: 1, size: 50000, storage: explorerCurrentStorage });
-        const data = await api(`/accounts/${explorerCurrentAccount}/messages?${params}`);
-        const uids = (data.messages || []).map(m => m.uid + '');
-        if (!uids.length) { alert('Le dossier est déjà vide.'); return; }
-        // Bulk delete
-        await api(`/accounts/${explorerCurrentAccount}/delete-bulk?storage=${explorerCurrentStorage}`, {
-            method: 'POST',
-            body: JSON.stringify({ uids, folder })
-        });
+        if (explorerCurrentStorage !== 'local') {
+            // Server-side purge: one request instead of listing every UID first
+            const res = await api(`/accounts/${explorerCurrentAccount}/empty-folder`, {
+                method: 'POST',
+                body: JSON.stringify({ folder_name: folder })
+            });
+            alert(`${res.deleted || 0} email(s) supprimé(s).`);
+        } else {
+            // Local storage has no empty-folder endpoint: list then bulk delete.
+            // Pagination is 0-indexed server-side.
+            const params = new URLSearchParams({ folder, page: 0, size: 50000, storage: 'local' });
+            const data = await api(`/accounts/${explorerCurrentAccount}/messages?${params}`);
+            const uids = (data.messages || []).map(m => m.uid + '');
+            if (!uids.length) { alert('Le dossier est déjà vide.'); return; }
+            await api(`/accounts/${explorerCurrentAccount}/delete-bulk?storage=local`, {
+                method: 'POST',
+                body: JSON.stringify({ uids, folder })
+            });
+        }
         await loadMessages();
         await loadFolders();
     } catch(e) { alert('Erreur: ' + (e.message || e)); }
 }
 
-async function _moveEmail(uid, fromFolder, targetFolder) {
-    const params = new URLSearchParams({ folder: fromFolder, storage: explorerCurrentStorage });
+async function _moveEmail(uid, fromFolder, targetFolder, targetStorage = 'imap') {
+    const params = new URLSearchParams({ folder: fromFolder, storage: explorerCurrentStorage, target_storage: targetStorage });
     await api(`/accounts/${explorerCurrentAccount}/message/${uid}/move?${params}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_folder: targetFolder })
@@ -6215,8 +6301,8 @@ function toggleSpamStatus(event) {
         popup.style.top = (rect.bottom + 4) + 'px';
         popup.style.left = Math.min(rect.left, window.innerWidth - 260) + 'px';
         let items = '';
-        items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_doMarkSpam('email','${escAttr(senderEmail)}')" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x2709; Email: <strong>${esc(senderEmail)}</strong></div>`;
-        if (senderDomain) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_doMarkSpam('domain','${escAttr(senderDomain)}')" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x1F310; Domaine: <strong>${esc(senderDomain)}</strong></div>`;
+        items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_doMarkSpam('email',${escJs(senderEmail)})" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x2709; Email: <strong>${esc(senderEmail)}</strong></div>`;
+        if (senderDomain) items += `<div class="popup-item" style="padding:0.3rem 0.5rem;cursor:pointer;border-radius:4px" onclick="_doMarkSpam('domain',${escJs(senderDomain)})" onmouseenter="this.style.background='var(--c-bg-hover)'" onmouseleave="this.style.background=''">&#x1F310; Domaine: <strong>${esc(senderDomain)}</strong></div>`;
         popup.innerHTML = `<div style="padding:0.2rem 0.5rem 0.3rem;font-weight:600;color:var(--c-text-error-bold);font-size:0.78rem">Ajouter a la blacklist</div>${items}`;
         document.body.appendChild(popup);
         const close = (e) => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', close); } };
@@ -6539,7 +6625,7 @@ function _renderSpamScanResults(data) {
             html += `<span style="font-weight:600">${esc(folder)}</span>`;
             html += `<span style="display:flex;align-items:center;gap:0.4rem">`;
             html += `<span style="color:var(--c-text-error-bold);font-weight:600">${info.spam_count}/${info.total} (${pct}%)</span>`;
-            html += `<button class="btn-sm" onclick="event.stopPropagation();moveSpamsToJunk('${escAttr(folder)}')" style="font-size:0.7rem;padding:0.15rem 0.4rem">Deplacer</button>`;
+            html += `<button class="btn-sm" onclick="event.stopPropagation();moveSpamsToJunk(${escJs(folder)})" style="font-size:0.7rem;padding:0.15rem 0.4rem">Deplacer</button>`;
             html += `</span></div>`;
             // Detail list (collapsed by default)
             html += `<div id="${folderId}" class="hidden" style="margin-top:0.3rem;font-size:0.78rem">`;
@@ -6553,8 +6639,8 @@ function _renderSpamScanResults(data) {
                 const dDomain = dEmail.includes('@') ? dEmail.split('@')[1] : '';
                 html += `<div style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--c-text-secondary);flex:1">${esc(d.from)}</span>`;
                 html += `<span style="display:flex;gap:0.3rem;align-items:center;flex-shrink:0">`;
-                if (dEmail) html += `<button class="btn-sm" onclick="addWhitelistFromSpamList('email','${escAttr(dEmail)}')" style="font-size:0.6rem;padding:0.1rem 0.25rem;color:var(--c-text-success)" title="Whitelist email">&#x2709;</button>`;
-                if (dDomain) html += `<button class="btn-sm" onclick="addWhitelistFromSpamList('domain','${escAttr(dDomain)}')" style="font-size:0.6rem;padding:0.1rem 0.25rem;color:var(--c-text-success)" title="Whitelist domaine">&#x1F310;</button>`;
+                if (dEmail) html += `<button class="btn-sm" onclick="addWhitelistFromSpamList('email',${escJs(dEmail)})" style="font-size:0.6rem;padding:0.1rem 0.25rem;color:var(--c-text-success)" title="Whitelist email">&#x2709;</button>`;
+                if (dDomain) html += `<button class="btn-sm" onclick="addWhitelistFromSpamList('domain',${escJs(dDomain)})" style="font-size:0.6rem;padding:0.1rem 0.25rem;color:var(--c-text-success)" title="Whitelist domaine">&#x1F310;</button>`;
                 html += `<span style="font-weight:600;color:var(--c-text-error-bold)">Score: ${d.score}</span></span></div>`;
                 html += `<div>${esc(d.subject)}</div>`;
                 html += `<div style="display:flex;flex-wrap:wrap;gap:0.2rem">${tags}</div>`;
@@ -6629,7 +6715,7 @@ function showMoveDialog(evt, isBulk) {
         showCreate: false,
         excludePath: explorerCurrentFolder,
         excludeStorage: explorerCurrentStorage,
-        onSelect: `moveToFolder(this.dataset.fpPath, this.dataset.fpStorage)`
+        action: 'move'
     });
     popup.innerHTML = html;
     document.body.appendChild(popup);
@@ -6649,8 +6735,8 @@ function closePopupHandler(e) {
 async function moveToFolder(targetFolder, targetStorage) {
     closePopup();
     targetStorage = targetStorage || 'imap';
-    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage });
-    const body = JSON.stringify({ target_folder: targetFolder, target_storage: targetStorage });
+    const params = new URLSearchParams({ folder: explorerCurrentFolder, storage: explorerCurrentStorage, target_storage: targetStorage });
+    const body = JSON.stringify({ target_folder: targetFolder });
     try {
         if (_bulkMoveUids && _bulkMoveUids.length) {
             // Bulk move
@@ -6758,6 +6844,8 @@ async function openCompose(prefill) {
     const overlay = document.getElementById('compose-overlay');
     overlay.dataset.inReplyTo = prefill.in_reply_to || '';
     overlay.dataset.references = prefill.references || '';
+    overlay.dataset.replyUid = prefill.reply_uid || '';
+    overlay.dataset.replyFolder = prefill.reply_folder || '';
 
     // Populate signature selector
     const sigSel = document.getElementById('compose-signature');
@@ -6926,6 +7014,8 @@ function replyEmail() {
         body_html: quoteHeader,
         in_reply_to: d.message_id,
         references: (d.references ? d.references + ' ' : '') + d.message_id,
+        reply_uid: d.uid,
+        reply_folder: d.folder,
     });
     if (wasFullscreen) {
         const panel = document.querySelector('#compose-overlay .modal-panel');
@@ -6954,6 +7044,8 @@ function replyAllEmail() {
         body_html: quoteHeader,
         in_reply_to: d.message_id,
         references: (d.references ? d.references + ' ' : '') + d.message_id,
+        reply_uid: d.uid,
+        reply_folder: d.folder,
     });
 }
 
@@ -7061,6 +7153,8 @@ async function sendComposedEmail() {
                 attachments: composeAttachments,
                 in_reply_to: overlay.dataset.inReplyTo || null,
                 references: overlay.dataset.references || null,
+                reply_uid: overlay.dataset.replyUid || null,
+                reply_folder: overlay.dataset.replyFolder || null,
                 priority: document.getElementById('compose-priority').value || null,
                 request_read_receipt: document.getElementById('compose-read-receipt').checked,
                 request_delivery_receipt: document.getElementById('compose-delivery-receipt').checked,
@@ -7535,7 +7629,55 @@ function formatSize(bytes) {
     return (bytes / 1048576).toFixed(1) + ' Mo';
 }
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+// Elasticsearch highlight fragments carry email content: escape everything, then
+// restore only the <em> markers Elasticsearch itself inserted around the matches.
+function escHighlight(s) { return esc(s).replace(/&lt;em&gt;/g, '<em>').replace(/&lt;\/em&gt;/g, '</em>'); }
 function escAttr(s) { return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// A value inside onclick="fn('...')" crosses two parsers: the HTML attribute decoder
+// runs first, so escAttr's &#39; is decoded back to ' before JS sees it — breaking any
+// name with an apostrophe. JSON-encode for the JS parser, then encode for the attribute.
+// Emits its own quotes: write onclick="fn(${escJs(v)})", not onclick="fn('${escJs(v)}')".
+function escJs(v) { return escAttr(JSON.stringify(v === null || v === undefined ? '' : v)); }
+
+// marked emits the raw HTML present in its input verbatim (the `sanitize` option was
+// dropped in v5) and does not filter javascript: URLs. AI answers quote attacker-controlled
+// email subjects and bodies, so allowlist the parsed result before it reaches innerHTML.
+const MD_ALLOWED_TAGS = new Set(['A','B','BLOCKQUOTE','BR','CODE','DEL','DIV','EM','H1','H2','H3','H4','H5','H6','HR','I','IMG','INPUT','LI','OL','P','PRE','S','SPAN','STRONG','SUB','SUP','TABLE','TBODY','TD','TFOOT','TH','THEAD','TR','UL']);
+// Dropped whole (content included) — unwrapping these would leak code as text or,
+// for foreign content, re-parse into something executable
+const MD_DROPPED_TAGS = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','TEMPLATE','NOSCRIPT','SVG','MATH','FORM','LINK','META','BASE']);
+const MD_ALLOWED_ATTRS = { A: ['href','title'], IMG: ['src','alt','title'], TD: ['align'], TH: ['align'], CODE: ['class'], INPUT: ['type','checked','disabled'] };
+
+function mdSafeUrl(u) {
+    const v = (u || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();  // "java\tscript:" would evade a plain prefix test
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return /^(https?|mailto):/i.test(v) ? v : '';
+    return v;  // relative, anchor or protocol-less: harmless
+}
+
+function mdSafe(markdown) {
+    if (typeof marked === 'undefined') return esc(markdown);
+    const doc = new DOMParser().parseFromString(marked.parse(markdown || ''), 'text/html');
+    for (const el of [...doc.body.querySelectorAll('*')]) {
+        if (MD_DROPPED_TAGS.has(el.tagName)) { el.remove(); continue; }
+        if (!MD_ALLOWED_TAGS.has(el.tagName)) { el.replaceWith(...el.childNodes); continue; }
+        const allowed = MD_ALLOWED_ATTRS[el.tagName] || [];
+        for (const attr of [...el.attributes]) {
+            const name = attr.name.toLowerCase();
+            if (!allowed.includes(name)) { el.removeAttribute(attr.name); continue; }
+            if (name === 'href' || name === 'src') {
+                const safe = mdSafeUrl(attr.value);
+                if (safe) el.setAttribute(name, safe); else el.removeAttribute(name);
+            }
+        }
+        // Set after filtering so these cannot be overridden by the input
+        if (el.tagName === 'A' && el.getAttribute('href')) {
+            el.setAttribute('target', '_blank');
+            el.setAttribute('rel', 'noopener noreferrer');
+        }
+    }
+    return doc.body.innerHTML;
+}
 
 // Keyboard shortcuts
 function isTyping() {
@@ -8137,7 +8279,7 @@ function _addComposeBubble(role, text) {
     bubble.className = 'chat-msg ' + role;
     bubble.style.fontSize = '0.85rem';
     if (role === 'assistant') {
-        bubble.innerHTML = '<div class="chat-md">' + (typeof marked !== 'undefined' ? marked.parse(text) : esc(text)) + '</div>';
+        bubble.innerHTML = '<div class="chat-md">' + mdSafe(text) + '</div>';
     } else {
         bubble.textContent = text;
     }
@@ -8255,9 +8397,7 @@ function _renderDashboard(data) {
     status.textContent = `${data.email_count} emails analyses — ${data.provider}/${data.model} — ${genDate}`;
 
     // Summary
-    document.getElementById('dash-summary').innerHTML = typeof marked !== 'undefined'
-        ? marked.parse(d.summary || 'Aucune synthese disponible.')
-        : esc(d.summary || '');
+    document.getElementById('dash-summary').innerHTML = mdSafe(d.summary || 'Aucune synthese disponible.');
 
     // Pending actions
     _renderDashList('dash-pending', d.pending_actions, (item) => {
@@ -8381,7 +8521,7 @@ function _renderDashboard(data) {
                 <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem">
                     <strong style="color:var(--c-text-accent)">${esc(groupName)}</strong>
                     <span style="font-size:0.75rem;color:var(--c-text-muted)">(${members.length} contact${members.length > 1 ? 's' : ''})</span>
-                    <button class="btn-primary btn-sm" onclick="applyContactSuggestions('${esc(groupName)}', ${JSON.stringify(members.map(m => ({email: m.email, name: m.name}))).replace(/'/g, '&#39;')})" style="margin-left:auto;font-size:0.75rem">Creer le groupe</button>
+                    <button class="btn-primary btn-sm" onclick="applyContactSuggestions(${escJs(groupName)}, ${escJs(members.map(m => ({email: m.email, name: m.name})))})" style="margin-left:auto;font-size:0.75rem">Creer le groupe</button>
                 </div>`;
             for (const m of members) {
                 sugHtml += `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.2rem 0;font-size:0.8rem">
@@ -8493,9 +8633,9 @@ function _emailTagIcons(email) {
     if (contact?.ai_directives) {
         icons += '<span class="tag-icon has-directive" title="Directive contact IA active">&#9733;</span>';
     } else {
-        const emailEnc = esc(email);
-        const nameEnc = contact ? esc(contact.name) : '';
-        icons += `<span class="tag-icon no-directive" title="Creer une directive contact" onclick="event.stopPropagation();quickCreateContactDirective('${emailEnc}','${nameEnc}')">+</span>`;
+        const emailEnc = escJs(email);
+        const nameEnc = escJs(contact ? contact.name : '');
+        icons += `<span class="tag-icon no-directive" title="Creer une directive contact" onclick="event.stopPropagation();quickCreateContactDirective(${emailEnc},${nameEnc})">+</span>`;
     }
     return icons;
 }

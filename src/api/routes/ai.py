@@ -39,6 +39,14 @@ from src.security import encrypt_value
 from src.ai.router import get_llm_for_user
 from src.ai.base import AIMessage
 
+
+async def _resolve_llm(db: AsyncSession, user: User, provider_id: int | None):
+    """Resolve the provider, turning an unknown provider_id into a clean 404."""
+    try:
+        return await get_llm_for_user(db, user, provider_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 router = APIRouter()
 
 CHAT_SYSTEM_PROMPT = (
@@ -58,6 +66,23 @@ CHAT_SYSTEM_PROMPT = (
     "[[attachment:ACCOUNT_ID:FOLDER:UID:INDEX:FILENAME]] where INDEX is the 0-based "
     "attachment index. Example: 'Certificat.pdf [[attachment:1:INBOX:4523:0:Certificat.pdf]]'.\n"
     "These markers render as clickable links in the user interface.\n"
+    "EMAIL LISTS — MANDATORY FORMAT: When you present a LIST of emails (search results, "
+    "recent emails, filtered results, etc.), you MUST render them as a Markdown table with "
+    "EXACTLY these columns in this order: | Date | Objet | Emplacement | Lien |. "
+    "The 'Lien' cell contains ONLY the marker [[email:ACCOUNT_ID:FOLDER:UID]] — no extra text. "
+    "The 'Emplacement' cell is the folder name. 'Date' uses the date field from the tool result. "
+    "'Objet' is the subject. Use the EXACT account_id, folder, and uid values returned by the "
+    "tool for THAT specific email — never copy values from a different row.\n"
+    "EMAIL LISTS — SIZE LIMIT: Display AT MOST 20 rows in the table, even if the tool returned "
+    "more. If there are more than 20 matching emails, show the 20 most recent, then state the "
+    "total count below the table (e.g. 'Total : 53 emails — les 20 plus récents sont affichés') "
+    "and offer to show more. NEVER truncate a table mid-row — always finish the last row you "
+    "started. When you call a search/list tool, pass limit/size ≤ 20 to keep token usage low.\n"
+    "TARGETED ACTIONS — CRITICAL: When you call forward_email, reply_to_email, delete_email, "
+    "move_email, read_email or any tool acting on ONE specific email, you MUST pass the "
+    "exact (account_id, folder, uid) triplet that the search/list tool returned for THAT "
+    "email. Never mix identifiers between different emails in the same list. If you are "
+    "unsure which email the user means, ASK for confirmation before acting — do not guess.\n"
     "IMPORTANT: Do NOT narrate your search process step by step. Do NOT write things like "
     "'Laissez-moi chercher...', 'Les résultats ne sont pas pertinents...', 'Je vais faire "
     "une autre recherche...'. Instead, search silently and only present the final, "
@@ -259,7 +284,7 @@ async def test_provider(
 ):
     """Test an existing AI provider by sending a simple prompt."""
     import time
-    llm = await get_llm_for_user(db, user, provider_id)
+    llm = await _resolve_llm(db, user, provider_id)
     return await _run_ai_test(llm)
 
 
@@ -353,7 +378,7 @@ async def diagnose_provider(
         checks.append({"name": "Endpoint accessible", "status": "skip", "detail": "Pas d'endpoint configure"})
 
     # 2. Non-streaming chat test
-    llm = await get_llm_for_user(db, user, provider_id)
+    llm = await _resolve_llm(db, user, provider_id)
     test_msgs = [
         AIMessage("system", "Reply with exactly: DIAG_OK"),
         AIMessage("user", "diagnostic ping"),
@@ -480,9 +505,13 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     """Chat with the AI — for Q&A about emails, summarization requests, etc."""
-    llm = await get_llm_for_user(db, user, req.provider_id)
+    llm = await _resolve_llm(db, user, req.provider_id)
     messages = _build_messages(req)
-    response = await llm.chat(messages)
+    try:
+        response = await llm.chat(messages)
+    except Exception as e:
+        logger.error(f"AI chat failed ({llm.provider_name}): {e}")
+        raise HTTPException(status_code=502, detail=f"AI provider error: {e}")
     return AIChatResponse(response=response.content, model=response.model, provider=response.provider)
 
 
@@ -493,7 +522,7 @@ async def chat_stream(
     db: AsyncSession = Depends(get_db),
 ):
     """Streaming chat with the AI — returns SSE events."""
-    llm = await get_llm_for_user(db, user, req.provider_id)
+    llm = await _resolve_llm(db, user, req.provider_id)
     logger.info(f"Stream chat: provider={llm.provider_name}, model={getattr(llm, 'default_model', '?')}")
     messages = _build_messages(req)
 

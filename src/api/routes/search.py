@@ -1,3 +1,4 @@
+from elasticsearch import NotFoundError
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from src.db.models import User
@@ -65,9 +66,13 @@ async def search(
                 date=src.get("date", ""),
                 has_attachments=src.get("has_attachments", False),
                 highlight=hit.get("highlight"),
-                score=hit.get("_score", 0),
+                # Sorting by date makes ES return _score: null
+                score=hit.get("_score") or 0,
             ))
 
         return SearchResponse(total=total, results=results)
+    except NotFoundError:
+        # No index yet for this user (never synced)
+        return SearchResponse(total=0, results=[])
     finally:
         await es.close()

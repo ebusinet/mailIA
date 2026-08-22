@@ -1,6 +1,7 @@
 """
 Rule execution engine — evaluates rules against emails and performs IMAP actions.
 """
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -8,6 +9,12 @@ from src.ai.base import LLMProvider
 from src.rules.parser import ParsedRule, RuleCondition
 
 logger = logging.getLogger(__name__)
+
+AI_RULE_TIMEOUT = 60  # seconds per email for an AI-backed rule condition
+
+
+class AIProviderTimeout(Exception):
+    """The AI provider did not answer in time — callers should stop asking it."""
 
 
 @dataclass
@@ -21,6 +28,8 @@ class EmailContext:
     has_attachments: bool
     attachment_names: list[str]
     date: str
+    message_id: str = ""   # needed to thread replies (In-Reply-To / References)
+    references: str = ""
 
 
 @dataclass
@@ -86,10 +95,18 @@ async def _check_condition(
                 f"Has attachments: {email.has_attachments}\n\n"
                 f"{email.body_text[:2000]}"
             )
-            result = await llm.evaluate_rule(email_summary, condition.raw)
+            # Providers allow up to 600s per call; that is per-email here, so a
+            # slow or broken provider would stall a whole sync cycle.
+            result = await asyncio.wait_for(
+                llm.evaluate_rule(email_summary, condition.raw),
+                timeout=AI_RULE_TIMEOUT,
+            )
             if result:
                 return (0.8, "AI matched")
             return None
+        except asyncio.TimeoutError:
+            logger.error(f"AI evaluation timed out after {AI_RULE_TIMEOUT}s")
+            raise AIProviderTimeout(f"no answer in {AI_RULE_TIMEOUT}s")
         except Exception as e:
             logger.error(f"AI evaluation failed: {e}")
             return None

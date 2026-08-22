@@ -1,12 +1,13 @@
 import imaplib
 import logging
 import time as _time_mod
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from starlette.concurrency import iterate_in_threadpool
 from starlette.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, cast, String
 
@@ -18,6 +19,19 @@ from src.imap.manager import _imap_quote
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _require_folder_name(value: str) -> str:
+    """A blank folder name is never a legitimate request.
+
+    IMAP servers do not reliably reject it: GreenMail answers OK to `COPY <uid> ""`
+    and silently discards the message, so the caller is told the move succeeded while
+    the mail is destroyed. No status check downstream can catch that — the value has
+    to be refused before any command is issued.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("le nom de dossier ne peut pas etre vide")
+    return value
 
 
 class MailAccountCreate(BaseModel):
@@ -32,6 +46,7 @@ class MailAccountCreate(BaseModel):
     smtp_ssl: bool = True
     smtp_user: str | None = None
     smtp_password: str | None = None
+    sync_enabled: bool = True
 
 
 class MailAccountUpdate(BaseModel):
@@ -79,6 +94,8 @@ class SendEmailRequest(BaseModel):
     priority: str | None = None  # "high", "normal", "low"
     request_read_receipt: bool = False
     request_delivery_receipt: bool = False
+    reply_uid: str | None = None  # original message to flag \Answered
+    reply_folder: str | None = None
 
 
 class SaveDraftRequest(BaseModel):
@@ -115,6 +132,8 @@ class WhitelistEntry(BaseModel):
 
 class MoveRequest(BaseModel):
     target_folder: str
+
+    _v = field_validator("target_folder")(_require_folder_name)
 
 
 class BulkDeleteRequest(BaseModel):
@@ -154,8 +173,10 @@ async def create_account(
         imap_password_encrypted=encrypt_value(req.imap_password),
         smtp_host=req.smtp_host,
         smtp_port=req.smtp_port,
+        smtp_ssl=req.smtp_ssl,
         smtp_user=req.smtp_user,
         smtp_password_encrypted=encrypt_value(req.smtp_password) if req.smtp_password else None,
+        sync_enabled=req.sync_enabled,
     )
     db.add(account)
     await db.commit()
@@ -172,6 +193,7 @@ class TestCredentials(BaseModel):
     imap_password: str
     smtp_host: str | None = None
     smtp_port: int = 465
+    smtp_ssl: bool = True
     test_type: str = "imap"  # "imap" or "smtp"
 
 
@@ -196,14 +218,9 @@ async def test_credentials(
     else:
         if not req.smtp_host:
             return {"status": "error", "message": "Aucun serveur SMTP renseigne"}
-        import smtplib
-        import ssl as ssl_mod
+        from src.smtp_client import smtp_connect
         try:
-            if req.smtp_port in (465,):
-                server = smtplib.SMTP_SSL(req.smtp_host, req.smtp_port, timeout=10)
-            else:
-                server = smtplib.SMTP(req.smtp_host, req.smtp_port, timeout=10)
-                server.starttls(context=ssl_mod.create_default_context())
+            server = smtp_connect(req.smtp_host, req.smtp_port, req.smtp_ssl, timeout=10)
             server.login(req.imap_user, req.imap_password)
             server.quit()
             return {"status": "ok", "message": f"Connexion SMTP reussie ({req.smtp_host}:{req.smtp_port})"}
@@ -275,18 +292,15 @@ async def test_smtp(
         return {"status": "error", "message": "Aucun serveur SMTP configure pour ce compte"}
 
     from src.security import decrypt_value as _dec
-    import smtplib
-    import ssl as ssl_mod
+    from src.smtp_client import smtp_connect
 
     smtp_password = _dec(account.smtp_password_encrypted) if account.smtp_password_encrypted else _dec(account.imap_password_encrypted)
     smtp_user = account.smtp_user or account.imap_user
 
+    smtp_ssl = getattr(account, 'smtp_ssl', True)
+
     try:
-        if account.smtp_port in (465,):
-            server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port, timeout=10)
-        else:
-            server = smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=10)
-            server.starttls(context=ssl_mod.create_default_context())
+        server = smtp_connect(account.smtp_host, account.smtp_port, smtp_ssl, timeout=10)
         server.login(smtp_user, smtp_password)
         server.quit()
         return {"status": "ok", "message": f"Connexion SMTP reussie ({account.smtp_host}:{account.smtp_port})"}
@@ -301,7 +315,15 @@ async def sync_account(
     db: AsyncSession = Depends(get_db),
 ):
     account = await _get_account(account_id, user, db)
+    from src.worker.app import worker_online
     from src.worker.tasks import sync_account as sync_task
+
+    if not worker_online():
+        raise HTTPException(
+            status_code=503,
+            detail="Aucun worker de synchronisation n'est actif : la demande n'a pas ete mise "
+                   "en file (elle serait restee sans effet). Contactez l'administrateur.",
+        )
     sync_task.delay(account.id)
     return {"status": "sync_started", "account_id": account.id}
 
@@ -836,6 +858,8 @@ async def remove_from_spam_blacklist(
 class CreateFolderRequest(BaseModel):
     folder_name: str
 
+    _v = field_validator("folder_name")(_require_folder_name)
+
 
 @router.post("/{account_id}/create-folder")
 async def create_folder(
@@ -869,6 +893,8 @@ async def create_folder(
 class DeleteFolderRequest(BaseModel):
     folder_name: str
     force: bool = False
+
+    _v = field_validator("folder_name")(_require_folder_name)
 
 
 @router.post("/{account_id}/delete-folder")
@@ -983,6 +1009,8 @@ async def delete_folder(
 class EmptyFolderRequest(BaseModel):
     folder_name: str
 
+    _v = field_validator("folder_name")(_require_folder_name)
+
 
 @router.post("/{account_id}/empty-folder")
 async def empty_folder(
@@ -1025,6 +1053,8 @@ async def empty_folder(
 class RenameFolderRequest(BaseModel):
     old_name: str
     new_name: str
+
+    _v = field_validator("old_name", "new_name")(_require_folder_name)
 
 
 @router.post("/{account_id}/rename-folder")
@@ -1115,6 +1145,8 @@ async def list_messages(
     db: AsyncSession = Depends(get_db),
 ):
     """List messages in an IMAP or local folder — folder passed as query param to handle / in names."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
         from sqlalchemy import func as sa_func
         folder_result = await db.execute(
@@ -1171,8 +1203,6 @@ async def list_messages(
                 "spam": False,
             })
         return {"folder": folder, "total": total, "page": page, "size": size, "messages": messages, "storage": "local"}
-
-    account = await _get_account(account_id, user, db)
 
     # Load spam whitelist and blacklist for this account
     wl_result = await db.execute(
@@ -1243,48 +1273,68 @@ async def list_messages(
             else:
                 search_uids = None  # means "all"
 
-            # Fetch all UIDs + INTERNALDATE for date-based pagination
-            status, data = conn.uid("FETCH", "1:*", "(UID INTERNALDATE)")
+            from email.utils import parsedate_to_datetime as _pdt
+            from datetime import datetime as _dt
+
+            def _parse_idate(s):
+                """Parse an RFC 2822 Date: header or an IMAP INTERNALDATE. Always aware."""
+                for parse in (
+                    _pdt,
+                    lambda v: _dt.strptime(v.strip(), "%d-%b-%Y %H:%M:%S %z"),  # INTERNALDATE
+                ):
+                    try:
+                        dt = parse(s)
+                        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        continue
+                return _dt.min.replace(tzinfo=timezone.utc)
+
+            # One date per UID, used for display AND sorting AND filtering alike. The
+            # Date: header is the reference (same as the detail view and the ES index);
+            # INTERNALDATE only fills in when the header is missing or unparseable.
+            status, data = conn.uid("FETCH", "1:*", "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (DATE)])")
             uid_dates = []
             if status == "OK" and data:
                 for item in data:
+                    header_bytes = b""
                     if isinstance(item, tuple) and len(item) == 2:
                         meta = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                        header_bytes = item[1] or b""
                     elif isinstance(item, bytes):
                         meta = item.decode(errors="replace")
                     else:
                         continue
                     uid_match = re.search(r'UID (\d+)', meta)
                     date_match = re.search(r'INTERNALDATE "([^"]+)"', meta)
-                    if uid_match and date_match:
-                        uid = uid_match.group(1)
-                        if search_uids is not None and uid not in search_uids:
-                            continue
-                        idate = date_match.group(1)
-                        uid_dates.append((uid, idate))
+                    if not uid_match:
+                        continue
+                    uid = uid_match.group(1)
+                    if search_uids is not None and uid not in search_uids:
+                        continue
+                    hdr_date = ""
+                    if header_bytes:
+                        hm = re.search(rb'^Date:\s*(.+)$', header_bytes, re.IGNORECASE | re.MULTILINE)
+                        if hm:
+                            hdr_date = hm.group(1).decode(errors="replace").strip()
+                    effective = None
+                    if hdr_date:
+                        parsed = _parse_idate(hdr_date)
+                        if parsed != _dt.min.replace(tzinfo=timezone.utc):
+                            effective = parsed
+                    if effective is None and date_match:
+                        effective = _parse_idate(date_match.group(1))
+                    if effective is None:
+                        continue
+                    uid_dates.append((uid, effective))
 
-            # Sort by INTERNALDATE descending (newest first)
-            from email.utils import parsedate_to_datetime as _pdt
-            from datetime import datetime as _dt
-            def _parse_idate(s):
-                try:
-                    return _pdt(s)
-                except Exception:
-                    pass
-                try:
-                    # INTERNALDATE format: "09-Mar-2026 17:24:42 +0100"
-                    return _dt.strptime(s.strip(), "%d-%b-%Y %H:%M:%S %z")
-                except Exception:
-                    return _dt.min.replace(tzinfo=None)
+            uid_dates.sort(key=lambda x: x[1], reverse=True)
 
-            uid_dates.sort(key=lambda x: _parse_idate(x[1]), reverse=True)
-
-            # Apply date filter (substring match on formatted date)
+            # Apply date filter on the very value the list displays
             if filter_date:
                 fd_lower = filter_date.lower()
                 uid_dates = [
-                    (uid, idate) for uid, idate in uid_dates
-                    if fd_lower in _parse_idate(idate).strftime("%Y-%m-%d %H:%M").lower()
+                    (uid, dt) for uid, dt in uid_dates
+                    if fd_lower in dt.strftime("%Y-%m-%d %H:%M").lower()
                 ]
 
             # Server-side sort by from/subject requires fetching headers for all UIDs
@@ -1346,14 +1396,9 @@ async def list_messages(
                             from_addr = _decode_header(msg.get("From", ""))
                             to_addr = _decode_header(msg.get("To", ""))
                             subject = _decode_header(msg.get("Subject", ""))
-                            date_str = ""
-                            idate_raw = idate_lookup.get(uid, "")
-                            if idate_raw:
-                                try:
-                                    idt = _parse_idate(idate_raw)
-                                    date_str = idt.strftime("%Y-%m-%d %H:%M")
-                                except Exception:
-                                    date_str = idate_raw
+                            # Same value the sort and the filter used
+                            msg_dt = idate_lookup.get(uid)
+                            date_str = msg_dt.strftime("%Y-%m-%d %H:%M") if msg_dt else ""
                             seen = "\\Seen" in flags_str
                             flagged = "\\Flagged" in flags_str
                             answered = "\\Answered" in flags_str
@@ -1371,22 +1416,15 @@ async def list_messages(
                 result.sort(key=lambda m: uid_order.get(m["uid"], 999))
                 return result
 
-            # Build post-fetch filter for precise display-value matching
-            def _display_name(addr):
-                """Extract display name from 'Name <email>' or just return as-is."""
-                if '<' in addr:
-                    name = addr[:addr.index('<')].strip().strip('"').strip("'")
-                    if name:
-                        return name
-                return addr
-
+            # Build post-fetch filter — match the whole header (display name AND address),
+            # like the IMAP SEARCH FROM/TO criteria sent above
             _post_filters = []
             if filter_from:
                 _ff = filter_from.lower()
-                _post_filters.append(lambda m, _f=_ff: _f in _display_name(m["from"]).lower())
+                _post_filters.append(lambda m, _f=_ff: _f in m["from"].lower())
             if filter_to:
                 _ft = filter_to.lower()
-                _post_filters.append(lambda m, _f=_ft: _f in _display_name(m["to"]).lower())
+                _post_filters.append(lambda m, _f=_ft: _f in m["to"].lower())
             if filter_subject:
                 _fsub = filter_subject.lower()
                 _post_filters.append(lambda m, _f=_fsub: _f in m["subject"].lower())
@@ -1605,14 +1643,10 @@ async def get_message(
     db: AsyncSession = Depends(get_db),
 ):
     """Fetch full email content by UID — live from IMAP or local DB."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
-        email_id = int(uid.replace("L", ""))
-        result = await db.execute(
-            select(LocalEmail).where(LocalEmail.id == email_id)
-        )
-        em = result.scalar_one_or_none()
-        if not em:
-            raise HTTPException(status_code=404, detail="Email not found")
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
         attachments = []
         if em.raw_message:
             import email as email_mod
@@ -1641,7 +1675,6 @@ async def get_message(
             "attachments": attachments, "has_attachments": em.has_attachments,
         }
 
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     import email as email_mod
@@ -1847,21 +1880,27 @@ async def send_email(
         from_display=from_addr,
     )
 
-    import smtplib
-    import ssl as ssl_mod
+    from src.smtp_client import smtp_connect
     all_recipients = list(req.to) + list(req.cc) + list(req.bcc)
     try:
         smtp_ssl = getattr(account, 'smtp_ssl', True)
-        if account.smtp_port in (465,) or (smtp_ssl and account.smtp_port != 587):
-            server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port, timeout=30)
-        else:
-            server = smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=30)
-            server.starttls(context=ssl_mod.create_default_context())
+        server = smtp_connect(account.smtp_host, account.smtp_port, smtp_ssl, timeout=30)
         server.login(smtp_user, smtp_password)
         server.sendmail(from_addr, all_recipients, raw_msg.as_string())
         server.quit()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Erreur SMTP: {e}")
+
+    # Flag the original as answered when this was a reply. Local emails carry an
+    # "L"-prefixed uid and live in PostgreSQL, not on the IMAP server.
+    is_reply_to_local = bool(req.reply_uid and req.reply_uid.startswith("L"))
+    if req.in_reply_to and is_reply_to_local:
+        try:
+            em = await _get_local_email(int(req.reply_uid[1:]), account_id, db)
+            em.answered = True
+            await db.commit()
+        except Exception as e:
+            logger.warning("Could not flag local email %s as answered: %s", req.reply_uid, e)
 
     # Save to Sent folder
     try:
@@ -1872,6 +1911,11 @@ async def send_email(
         )
         with IMAPManager(config) as imap:
             imap.save_to_sent(raw_msg.as_bytes())
+            if req.in_reply_to and req.reply_uid and req.reply_folder and not is_reply_to_local:
+                try:
+                    imap.flag_email(req.reply_uid, req.reply_folder, "answered")
+                except Exception as e:
+                    logger.warning("Could not flag UID %s as answered: %s", req.reply_uid, e)
     except Exception:
         pass
 
@@ -1926,12 +1970,10 @@ async def update_flags(
     db: AsyncSession = Depends(get_db),
 ):
     """Add or remove a flag on an email."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
-        email_id = int(uid.replace("L", ""))
-        result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
-        em = result.scalar_one_or_none()
-        if not em:
-            raise HTTPException(status_code=404, detail="Email not found")
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
         flag_map = {"seen": "seen", "read": "seen", "flagged": "flagged", "important": "flagged", "answered": "answered"}
         attr = flag_map.get(req.flag.lower())
         if attr:
@@ -1939,7 +1981,6 @@ async def update_flags(
             await db.commit()
         return {"status": "ok", "flag": req.flag, "action": req.action}
 
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     config = IMAPConfig(
@@ -1974,24 +2015,21 @@ async def move_message(
     db: AsyncSession = Depends(get_db),
 ):
     """Move an email to another folder (supports imap/local cross-moves)."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local" and target_storage == "local":
-        email_id = int(uid.replace("L", ""))
         target_folder_result = await db.execute(
             select(LocalFolder).where(LocalFolder.account_id == account_id, LocalFolder.path == req.target_folder)
         )
         target = target_folder_result.scalar_one_or_none()
         if not target:
             raise HTTPException(status_code=404, detail="Target local folder not found")
-        result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
-        em = result.scalar_one_or_none()
-        if not em:
-            raise HTTPException(status_code=404, detail="Email not found")
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
         em.folder_id = target.id
         await db.commit()
         return {"status": "moved", "target_folder": req.target_folder}
 
     elif storage == "imap" and target_storage == "local":
-        account = await _get_account(account_id, user, db)
         from src.imap.manager import IMAPManager, IMAPConfig
         from src.security import decrypt_value as _dec
         config = IMAPConfig(host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
@@ -2021,7 +2059,7 @@ async def move_message(
                 to_addr=_decode_header(msg.get("To", "")),
                 cc_addr=_decode_header(msg.get("Cc", "")),
                 subject=_decode_header(msg.get("Subject", "")),
-                date=date_val, seen=True, has_attachments=has_att,
+                date=_naive_utc(date_val), seen=True, has_attachments=has_att,
                 body_text=body_text, body_html=body_html,
                 raw_message=raw,
             )
@@ -2031,22 +2069,26 @@ async def move_message(
         return {"status": "moved", "target_folder": req.target_folder}
 
     elif storage == "local" and target_storage == "imap":
-        email_id = int(uid.replace("L", ""))
-        result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
-        em = result.scalar_one_or_none()
-        if not em or not em.raw_message:
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
+        if not em.raw_message:
             raise HTTPException(status_code=404, detail="Email not found or no raw data")
-        account = await _get_account(account_id, user, db)
         from src.imap.manager import IMAPManager, IMAPConfig
         from src.security import decrypt_value as _dec
         config = IMAPConfig(host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
                             user=account.imap_user, password=_dec(account.imap_password_encrypted))
         import time
+        import email as email_mod, email.utils
+        # Preserve the original date as INTERNALDATE, like the mbox import does
+        imap_date = imaplib.Time2Internaldate(time.time())
+        parsed_date = email.utils.parsedate_tz(
+            email_mod.message_from_bytes(em.raw_message).get("Date", "") or ""
+        )
+        if parsed_date:
+            imap_date = imaplib.Time2Internaldate(email.utils.mktime_tz(parsed_date))
         with IMAPManager(config) as imap:
             imap._conn.create(_imap_quote(req.target_folder))
             status, _ = imap._conn.append(
-                _imap_quote(req.target_folder), "\\Seen",
-                imaplib.Time2Internaldate(time.time()), em.raw_message
+                _imap_quote(req.target_folder), "\\Seen", imap_date, em.raw_message
             )
             if status != "OK":
                 raise HTTPException(status_code=502, detail="IMAP append failed")
@@ -2055,13 +2097,13 @@ async def move_message(
         return {"status": "moved", "target_folder": req.target_folder}
 
     # Default: imap -> imap
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     config = IMAPConfig(
         host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
         user=account.imap_user, password=_dec(account.imap_password_encrypted),
     )
+    from src.imap.manager import InvalidFolderName
     try:
         with IMAPManager(config) as imap:
             ok = imap.move_email(uid, folder, req.target_folder)
@@ -2069,6 +2111,8 @@ async def move_message(
             raise HTTPException(status_code=502, detail="Move failed")
     except HTTPException:
         raise
+    except InvalidFolderName as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
 
@@ -2085,17 +2129,14 @@ async def delete_message(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an email (move to Trash or delete from local DB)."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
-        email_id = int(uid.replace("L", ""))
-        result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
-        em = result.scalar_one_or_none()
-        if not em:
-            raise HTTPException(status_code=404, detail="Email not found")
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
         await db.delete(em)
         await db.commit()
         return {"status": "deleted"}
 
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     config = IMAPConfig(
@@ -2124,11 +2165,16 @@ async def delete_bulk(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete multiple emails in one batch (single IMAP connection)."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
         deleted = 0
         for uid in req.uids:
-            email_id = int(uid.replace("L", ""))
-            result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
+            result = await db.execute(
+                select(LocalEmail)
+                .join(LocalFolder, LocalEmail.folder_id == LocalFolder.id)
+                .where(LocalEmail.id == int(uid.replace("L", "")), LocalFolder.account_id == account_id)
+            )
             em = result.scalar_one_or_none()
             if em:
                 await db.delete(em)
@@ -2136,7 +2182,6 @@ async def delete_bulk(
         await db.commit()
         return {"deleted": deleted, "failed": len(req.uids) - deleted}
 
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     config = IMAPConfig(
@@ -2163,11 +2208,11 @@ async def download_attachment(
     db: AsyncSession = Depends(get_db),
 ):
     """Download an attachment by index from an email."""
+    account = await _get_account(account_id, user, db)
+
     if storage == "local":
-        email_id = int(uid.replace("L", ""))
-        result = await db.execute(select(LocalEmail).where(LocalEmail.id == email_id))
-        em = result.scalar_one_or_none()
-        if not em or not em.raw_message:
+        em = await _get_local_email(int(uid.replace("L", "")), account_id, db)
+        if not em.raw_message:
             raise HTTPException(status_code=404, detail="Email not found or no raw data")
         import email as email_mod
         msg = email_mod.message_from_bytes(em.raw_message)
@@ -2191,7 +2236,6 @@ async def download_attachment(
                 att_idx += 1
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    account = await _get_account(account_id, user, db)
     from src.imap.manager import IMAPManager, IMAPConfig
     from src.security import decrypt_value as _dec
     config = IMAPConfig(
@@ -2221,6 +2265,8 @@ async def download_attachment(
 class CreateLocalFolderRequest(BaseModel):
     name: str
     parent_path: str | None = None
+
+    _v = field_validator("name")(_require_folder_name)
 
 
 @router.post("/{account_id}/local-folders")
@@ -2930,6 +2976,26 @@ async def _get_account(account_id: int, user: User, db: AsyncSession) -> MailAcc
     return account
 
 
+def _naive_utc(dt):
+    """local_emails.date is TIMESTAMP WITHOUT TIME ZONE — asyncpg rejects aware datetimes."""
+    if dt is not None and dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+async def _get_local_email(email_id: int, account_id: int, db: AsyncSession) -> LocalEmail:
+    """Get a local email scoped to an account — callers must have validated the account first."""
+    result = await db.execute(
+        select(LocalEmail)
+        .join(LocalFolder, LocalEmail.folder_id == LocalFolder.id)
+        .where(LocalEmail.id == email_id, LocalFolder.account_id == account_id)
+    )
+    em = result.scalar_one_or_none()
+    if not em:
+        raise HTTPException(status_code=404, detail="Email not found")
+    return em
+
+
 _DISPOSABLE_DOMAINS = {
     "mailinator.com", "guerrillamail.com", "tempmail.com", "throwaway.email",
     "yopmail.com", "sharklasers.com", "guerrillamailblock.com", "grr.la",
@@ -3256,7 +3322,7 @@ def _import_one_message_local(msg, folder_id: int, existing_msgids: set, db_sess
 
         date_val = None
         try:
-            date_val = email.utils.parsedate_to_datetime(msg.get("Date", ""))
+            date_val = _naive_utc(email.utils.parsedate_to_datetime(msg.get("Date", "")))
         except Exception:
             pass
 
@@ -3482,6 +3548,97 @@ def _run_zip_import_local(job_id: str, account_id: int, zip_path: str,
         update_job(job_id, status="error", error=str(e))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.get("/{account_id}/folder-export")
+async def export_folder_zip(
+    account_id: int,
+    folder: str = Query(..., description="Folder path to export"),
+    storage: str = Query("imap", description="imap or local"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download all emails of a folder as a zip of .eml files."""
+    import io
+    import zipfile
+    import re as _re
+    from datetime import datetime as _dt
+
+    account = await _get_account(account_id, user, db)
+
+    def _safe(name: str, maxlen: int = 80) -> str:
+        name = _re.sub(r"[^\w\-. ]+", "_", name or "").strip(". ")
+        return (name or "email")[:maxlen]
+
+    raws: list[tuple[str, bytes]] = []  # (filename, bytes)
+
+    if storage == "local":
+        result = await db.execute(
+            select(LocalEmail, LocalFolder)
+            .join(LocalFolder, LocalEmail.folder_id == LocalFolder.id)
+            .where(LocalFolder.account_id == account_id, LocalFolder.path == folder)
+        )
+        rows = result.all()
+        for em, _ in rows:
+            if not em.raw_message:
+                continue
+            date_str = em.date.strftime("%Y%m%d_%H%M%S") if em.date else "nodate"
+            fname = f"{date_str}_{_safe(em.from_addr or 'unknown')}_{_safe(em.subject or 'no-subject', 60)}_L{em.id}.eml"
+            raws.append((fname, bytes(em.raw_message)))
+    else:
+        from src.imap.manager import IMAPManager, IMAPConfig
+        from src.security import decrypt_value as _dec
+        config = IMAPConfig(
+            host=account.imap_host, port=account.imap_port, ssl=account.imap_ssl,
+            user=account.imap_user, password=_dec(account.imap_password_encrypted),
+        )
+        try:
+            with IMAPManager(config) as imap:
+                uids = imap.get_uids(folder)
+                for uid in uids:
+                    raw = imap.fetch_raw(uid, folder)
+                    if not raw:
+                        continue
+                    # Parse minimal headers for filename
+                    try:
+                        import email as _email
+                        msg = _email.message_from_bytes(raw)
+                        frm = _email.utils.parseaddr(msg.get("From", ""))[1] or "unknown"
+                        subj = (msg.get("Subject") or "no-subject").replace("\r", " ").replace("\n", " ")
+                        date_tuple = _email.utils.parsedate_to_datetime(msg.get("Date", ""))
+                        date_str = date_tuple.strftime("%Y%m%d_%H%M%S")
+                    except Exception:
+                        frm, subj, date_str = "unknown", "no-subject", "nodate"
+                    fname = f"{date_str}_{_safe(frm)}_{_safe(subj, 60)}_U{uid}.eml"
+                    raws.append((fname, raw))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+
+    # Build zip in memory. For very large folders this loads everything at once.
+    # Acceptable for folders up to ~10k emails; beyond that we'd stream.
+    buf = io.BytesIO()
+    seen = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for fname, raw in raws:
+            # Disambiguate duplicate filenames
+            base = fname
+            n = seen.get(base, 0)
+            seen[base] = n + 1
+            final = base if n == 0 else f"{base[:-4]}_{n}.eml"
+            zf.writestr(final, raw)
+    buf.seek(0)
+
+    folder_safe = _safe(folder.replace("/", "_"), 100)
+    stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+    zip_name = f"mailia_{folder_safe}_{stamp}.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
+            "X-Email-Count": str(len(raws)),
+        },
+    )
 
 
 def _to_response(a: MailAccount) -> MailAccountResponse:
